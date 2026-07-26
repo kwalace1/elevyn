@@ -19,8 +19,14 @@ import {
   createMemoryRouter,
   createVoiceRouter,
 } from './routes/index.js';
+import {
+  createMsAuthRouter,
+  createMsRouter,
+  microsoftCalendarEvents,
+} from './routes/ms.js';
 import { isHosted, isMac } from './services/platform.js';
 import { fetchCalendarEvents } from './services/calendar/ics.js';
+import { isMicrosoftConfigured } from './services/ms/oauth.js';
 
 const ALLOWED_ORIGINS = (process.env.ELEVYN_ALLOWED_ORIGINS ?? '')
   .split(',')
@@ -43,6 +49,7 @@ export function createApp(): Express {
   app.use(
     cors({
       origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
+      credentials: true,
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Elevyn-Token'],
     }),
   );
@@ -54,6 +61,8 @@ export function createApp(): Express {
     app.use('/api', (req, res, next) => {
       if (req.method === 'OPTIONS') return next();
       if (req.path === '/health') return next();
+      // OAuth must complete without the Elevyn API token.
+      if (req.path === '/msauth' || req.path === '/ms/login') return next();
 
       const header = req.get('authorization') ?? '';
       const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
@@ -76,10 +85,12 @@ export function createApp(): Express {
       aiProvider: provider?.id ?? null,
       preferredProvider: process.env.ELEVYN_AI_PROVIDER ?? null,
       hosted: isHosted,
+      microsoft: isMicrosoftConfigured(),
       capabilities: {
         systemControl: isMac,
         neuralVoice: !isHosted,
         memory: true,
+        microsoft365: isMicrosoftConfigured(),
       },
       timestamp: new Date().toISOString(),
     });
@@ -139,21 +150,47 @@ export function createApp(): Express {
     });
   });
 
-  app.get('/api/calendar', async (_req, res) => {
+  app.get('/api/calendar', async (req, res) => {
+    try {
+      const ms = await microsoftCalendarEvents(req, res);
+      if (ms) {
+        res.json({ configured: true, source: 'microsoft', events: ms.events });
+        return;
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Microsoft calendar unavailable';
+      res.status(502).json({
+        configured: true,
+        source: 'microsoft',
+        error: message,
+        events: [],
+      });
+      return;
+    }
+
     const icsUrl = process.env.ELEVYN_CALENDAR_ICS?.trim();
     if (!icsUrl) {
-      res.json({ configured: false, events: [] });
+      res.json({
+        configured: false,
+        source: null,
+        events: [],
+      });
       return;
     }
     try {
       const events = await fetchCalendarEvents(icsUrl);
-      res.json({ configured: true, events });
+      res.json({ configured: true, source: 'ics', events });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Calendar unavailable';
-      res.status(502).json({ configured: true, error: message, events: [] });
+      res
+        .status(502)
+        .json({ configured: true, source: 'ics', error: message, events: [] });
     }
   });
 
+  app.use('/api', createMsRouter());
+  app.use('/api', createMsAuthRouter());
   app.use('/api/ai', createAiRouter(brain, ai, commands));
   app.use('/api/commands', createCommandsRouter(commands));
   app.use('/api/memory', createMemoryRouter(memory));

@@ -202,6 +202,7 @@ export class ElevynSpeech implements TextToSpeechService {
     const attempt = async (): Promise<Blob> => {
       const res = await fetch(`${API_BASE}/api/speak`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ text }),
       });

@@ -4,6 +4,29 @@ import type { AIProviderRegistry } from '../services/ai/registry.js';
 import type { CommandRegistry } from '../services/commands/registry.js';
 import type { MemoryService } from '../services/memory/store.js';
 import { listSpeechVoices, synthesizeSpeech } from '../services/voice/tts.js';
+import {
+  getValidAccessToken,
+  isMicrosoftConfigured,
+} from '../services/ms/oauth.js';
+import {
+  buildMicrosoftBrief,
+  fetchRecentMail,
+  fetchRecentTeamsChats,
+  mailFromSender,
+  speakMailBrief,
+  speakTeamsBrief,
+} from '../services/ms/graph.js';
+
+function wantsMicrosoftContext(utterance: string): boolean {
+  const lower = utterance.toLowerCase();
+  return (
+    /\b(catch me up|brief me|where were we|status (update|report)|recap)\b/i.test(
+      lower,
+    ) ||
+    /\b(email|inbox|outlook|mail)\b/i.test(lower) ||
+    /\b(teams|microsoft)\b/i.test(lower)
+  );
+}
 
 export function createAiRouter(
   brain: ElevynBrain,
@@ -29,9 +52,156 @@ export function createAiRouter(
       res.status(400).json({ error: 'utterance required' });
       return;
     }
-    const context = req.body?.context
+    let context = req.body?.context
       ? String(req.body.context).slice(0, 8000)
       : undefined;
+
+    const lower = utterance.toLowerCase();
+
+    // Connect Microsoft — client opens the OAuth URL.
+    if (
+      /\b(connect|link|sign ?in|log ?in|authenticate)\b.+\b(microsoft|outlook|teams|office|365|graph)\b/i.test(
+        lower,
+      ) ||
+      /\b(microsoft|outlook|teams)\b.+\b(connect|link|sign ?in|log ?in)\b/i.test(
+        lower,
+      )
+    ) {
+      if (!isMicrosoftConfigured()) {
+        res.json({
+          intent: {
+            type: 'chat',
+            reply:
+              'Microsoft 365 is not configured on this brain yet. Add MS_CLIENT_ID, MS_CLIENT_SECRET, MS_TENANT_ID, MS_REDIRECT_URI, and ELEVYN_TOKEN_SECRET.',
+          },
+          execution: null,
+        });
+        return;
+      }
+      res.json({
+        intent: {
+          type: 'chat',
+          reply: 'Opening Microsoft sign-in.',
+          args: { openUrl: '/api/ms/login' },
+        },
+        execution: null,
+      });
+      return;
+    }
+
+    // Disconnect.
+    if (
+      /\b(disconnect|unlink|sign ?out|log ?out)\b.+\b(microsoft|outlook|teams)\b/i.test(
+        lower,
+      )
+    ) {
+      const { clearSession } = await import('../services/ms/oauth.js');
+      clearSession(req, res);
+      res.json({
+        intent: {
+          type: 'chat',
+          reply: 'Disconnected from Microsoft 365.',
+        },
+        execution: null,
+      });
+      return;
+    }
+
+    const msBundle =
+      wantsMicrosoftContext(utterance) ||
+      /\b(check|any|read)\b.+\b(mail|email|inbox|outlook)\b/i.test(lower) ||
+      /\b(teams|chat)\b/i.test(lower)
+        ? await getValidAccessToken(req, res)
+        : null;
+
+    // Direct mail brief (skip model when we can answer from Graph).
+    if (
+      msBundle &&
+      /\b(check|any|read|what'?s in)\b.+\b(mail|email|inbox|outlook)\b/i.test(
+        lower,
+      )
+    ) {
+      try {
+        const mail = await fetchRecentMail(msBundle.accessToken);
+        const fromMatch = lower.match(
+          /\b(?:from|by)\s+([a-z0-9.'\-\s]{2,40})$/i,
+        ) || lower.match(/\bmail from\s+([a-z0-9.'\-\s]{2,40})/i);
+        const spoken = fromMatch
+          ? mailFromSender(mail, fromMatch[1].trim())
+          : speakMailBrief(mail);
+        res.json({
+          intent: { type: 'chat', reply: spoken },
+          execution: null,
+        });
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Mail unavailable';
+        res.json({
+          intent: {
+            type: 'chat',
+            reply: `I could not reach Outlook just now. ${message}`,
+          },
+          execution: null,
+        });
+        return;
+      }
+    }
+
+    // Teams updates (including “catch me up on Teams”).
+    if (
+      msBundle &&
+      (/\bcatch me up on teams\b/i.test(lower) ||
+        /\b(any (teams )?messages|teams updates?|what'?s on teams)\b/i.test(
+          lower,
+        ))
+    ) {
+      try {
+        const chats = await fetchRecentTeamsChats(msBundle.accessToken);
+        res.json({
+          intent: { type: 'chat', reply: speakTeamsBrief(chats) },
+          execution: null,
+        });
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Teams unavailable';
+        res.json({
+          intent: {
+            type: 'chat',
+            reply: `I could not reach Teams just now. ${message}`,
+          },
+          execution: null,
+        });
+        return;
+      }
+    }
+
+    // Enrich catch-me-up / microsoft mentions with a live Graph brief.
+    if (msBundle && wantsMicrosoftContext(utterance)) {
+      try {
+        const brief = await buildMicrosoftBrief(msBundle.accessToken);
+        context = context
+          ? `${context}\n\n${brief}`.slice(0, 10_000)
+          : brief;
+      } catch {
+        // Session + agenda brief still works without Graph.
+      }
+    } else if (
+      !msBundle &&
+      isMicrosoftConfigured() &&
+      wantsMicrosoftContext(utterance) &&
+      /\b(email|inbox|outlook|teams|microsoft)\b/i.test(lower)
+    ) {
+      res.json({
+        intent: {
+          type: 'chat',
+          reply:
+            'Microsoft 365 is not connected yet. Say “connect Microsoft” and I will open sign-in.',
+          args: { openUrl: '/api/ms/login' },
+        },
+        execution: null,
+      });
+      return;
+    }
 
     const intent = await brain.interpret(utterance, context);
     let execution = null;

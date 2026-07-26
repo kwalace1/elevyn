@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AiCore } from '../orb/AiCore';
 import { MicButton } from '../voice/MicButton';
 import { LeftRail, RightRail } from '../dashboard/Rails';
@@ -8,6 +8,8 @@ import { useClock } from '../../hooks/useClock';
 import { useDashboard } from '../../hooks/useDashboard';
 import { useElevyn } from '../../hooks/useElevyn';
 import { useSurface } from '../../hooks/useSurface';
+import { elevynApi } from '../../services/api/client';
+import { API_BASE } from '../../services/api/config';
 import {
   buildPresenceSnapshot,
   buildPresenceStatus,
@@ -18,6 +20,11 @@ export function Shell() {
   const { time, date, greeting } = useClock();
   const { data } = useDashboard();
   const surface = useSurface();
+  const [microsoft, setMicrosoft] = useState<{
+    configured: boolean;
+    connected: boolean;
+    account: string | null;
+  } | null>(null);
 
   const elevyn = useElevyn({
     onWake: surface.enterFocus,
@@ -29,6 +36,20 @@ export function Shell() {
       capturing: surface.panels.some((p) => p.kind === 'capture' && Boolean(p.armed)),
     }),
   });
+
+  const refreshMicrosoft = useCallback(async () => {
+    try {
+      setMicrosoft(await elevynApi.microsoft.status());
+    } catch {
+      setMicrosoft(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshMicrosoft();
+    const id = window.setInterval(() => void refreshMicrosoft(), 60_000);
+    return () => window.clearInterval(id);
+  }, [refreshMicrosoft, elevyn.brainOnline, elevyn.memoryEpoch]);
 
   const presenceStatus = useMemo(() => {
     const session = elevyn.getSessionSnapshot();
@@ -154,6 +175,13 @@ export function Shell() {
             presenceStatus={presenceStatus}
             agenda={elevyn.getUpcomingAgenda()}
             memoryEpoch={elevyn.memoryEpoch}
+            microsoft={microsoft}
+            onConnectMicrosoft={() => {
+              window.location.assign(`${API_BASE}/api/ms/login`);
+            }}
+            onDisconnectMicrosoft={() => {
+              void elevynApi.microsoft.logout().then(() => refreshMicrosoft());
+            }}
           />
         </motion.div>
 

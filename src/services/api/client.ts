@@ -13,6 +13,7 @@ import { API_BASE, authHeaders } from './config';
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const fetchOnce = () =>
     fetch(`${API_BASE}${path}`, {
+      credentials: 'include',
       ...init,
       headers: {
         'Content-Type': 'application/json',
@@ -78,7 +79,19 @@ export const elevynApi = {
   calendar: () =>
     request<{
       configured: boolean;
+      source?: string | null;
       events: Array<{ title: string; start: string; end?: string }>;
       error?: string;
     }>('/api/calendar'),
+
+  microsoft: {
+    status: () =>
+      request<{
+        configured: boolean;
+        connected: boolean;
+        account: string | null;
+      }>('/api/ms/status'),
+    logout: () =>
+      request<{ ok: boolean }>('/api/ms/logout', { method: 'POST' }),
+  },
 };

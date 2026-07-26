@@ -7,6 +7,7 @@ import type {
   SurfacePanel,
 } from '../types';
 import { elevynApi } from '../services/api/client';
+import { API_BASE } from '../services/api/config';
 import { BrowserSpeechRecognition } from '../services/voice/recognition';
 import { ElevynSpeech } from '../services/voice/elevynSpeech';
 import { SessionMemory } from '../services/session/memory';
@@ -481,6 +482,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           setTranscript('');
         }
 
+        const openUrl = intent.args?.openUrl;
+        if (typeof openUrl === 'string' && openUrl.startsWith('/')) {
+          // Full navigation so OAuth cookies land on this origin (incl. Vite proxy).
+          window.setTimeout(() => {
+            window.location.assign(`${API_BASE}${openUrl}`);
+          }, 600);
+        }
+
         const reply =
           execution && !execution.success
             ? execution.message
@@ -916,9 +925,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     const sync = async () => {
       try {
         const payload = await elevynApi.calendar();
-        if (cancelled || !payload.configured || !payload.events?.length) return;
+        if (cancelled || !payload.configured) return;
         durableRef.current.mergeCalendarEvents(
-          payload.events.map((e) => ({
+          (payload.events ?? []).map((e) => ({
             title: e.title,
             start: e.start,
             end: e.end,

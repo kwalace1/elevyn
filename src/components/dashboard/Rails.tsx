@@ -17,6 +17,13 @@ interface DashboardProps {
   agenda?: AgendaEvent[];
   session?: SessionSnapshot;
   memoryEpoch?: number;
+  microsoft?: {
+    configured: boolean;
+    connected: boolean;
+    account: string | null;
+  } | null;
+  onConnectMicrosoft?: () => void;
+  onDisconnectMicrosoft?: () => void;
 }
 
 export function LeftRail({
@@ -24,9 +31,19 @@ export function LeftRail({
   aiProvider,
   presenceStatus,
   agenda = [],
+  microsoft,
+  onConnectMicrosoft,
+  onDisconnectMicrosoft,
 }: Pick<
   DashboardProps,
-  'data' | 'aiProvider' | 'presenceStatus' | 'agenda' | 'memoryEpoch'
+  | 'data'
+  | 'aiProvider'
+  | 'presenceStatus'
+  | 'agenda'
+  | 'memoryEpoch'
+  | 'microsoft'
+  | 'onConnectMicrosoft'
+  | 'onDisconnectMicrosoft'
 >) {
   const system = data?.system;
   const upcoming = agenda.slice(0, 4);
@@ -46,6 +63,36 @@ export function LeftRail({
             label="Link"
             detail={system?.internet.detail ?? 'Checking…'}
           />
+          {microsoft?.configured ? (
+            <div className="ms-status">
+              <StatusDot
+                online={microsoft.connected}
+                label="Microsoft 365"
+                detail={
+                  microsoft.connected
+                    ? microsoft.account ?? 'Connected'
+                    : 'Not connected'
+                }
+              />
+              {microsoft.connected ? (
+                <button
+                  type="button"
+                  className="ms-status__btn"
+                  onClick={onDisconnectMicrosoft}
+                >
+                  Disconnect
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ms-status__btn"
+                  onClick={onConnectMicrosoft}
+                >
+                  Connect
+                </button>
+              )}
+            </div>
+          ) : null}
         </div>
       </GlassPanel>
 
@@ -66,7 +113,9 @@ export function LeftRail({
           ))}
           {!upcoming.length ? (
             <p className="muted">
-              Nothing scheduled — say “meeting with Sarah at 3.”
+              {microsoft?.connected
+                ? 'Nothing in the next day or so from Microsoft.'
+                : 'Nothing scheduled — say “meeting with Sarah at 3.”'}
             </p>
           ) : null}
         </div>

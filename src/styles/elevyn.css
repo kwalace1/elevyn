@@ -2250,6 +2250,30 @@ body {
   letter-spacing: 0.02em;
 }
 
+.ms-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ms-status__btn {
+  align-self: flex-start;
+  margin-left: 18px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 176, 80, 0.72);
+  font: inherit;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.ms-status__btn:hover {
+  color: rgba(255, 210, 150, 0.95);
+}
+
 .session-turns {
   margin-top: 8px;
   padding-top: 8px;
