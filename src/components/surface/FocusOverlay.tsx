@@ -21,7 +21,7 @@ interface FocusOverlayProps {
 const STATE_HINT: Record<ElevynState, string> = {
   idle: 'Say “Hey Elevyn”',
   listening: 'Listening…',
-  thinking: 'Working on it, sir…',
+  thinking: 'Working on it…',
   speaking: 'Speaking…',
   offline: 'Offline',
 };

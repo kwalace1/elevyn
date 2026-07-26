@@ -18,7 +18,7 @@ export const isHosted =
   process.env.VERCEL === '1';
 
 export const MAC_ONLY_MESSAGE =
-  'That control needs the brain running on your Mac, sir. This instance is hosted.';
+  'That control needs the brain running on your Mac. This instance is hosted.';
 
 /** Guard for handlers that shell out to macOS-only binaries. */
 export function macOnly(): CommandExecutionResult | null {

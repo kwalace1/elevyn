@@ -182,7 +182,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           phaseRef.current = 'wake';
           setState('idle');
           stateRef.current = 'idle';
-          speak('Very good, sir.', resumeWakeSoon);
+          speak('Alright.', resumeWakeSoon);
           return;
         }
         if (!readdressed) {
@@ -293,7 +293,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const message =
           err instanceof Error ? err.message : 'Something went wrong.';
         setError(message);
-        speak('Pardon me, sir — I could not reach the Elevyn brain.', resumeWakeSoon);
+        speak('Sorry — I could not reach the Elevyn brain.', resumeWakeSoon);
       } finally {
         processingRef.current = false;
       }
@@ -329,9 +329,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   resumeConversationRef.current = resumeConversation;
 
   const wakeGreetings = useRef([
-    'Yes sir.',
-    'At your service, sir.',
-    'Go ahead, sir.',
+    'Yes?',
+    'Go ahead.',
+    'I am listening.',
   ]);
   const greetIndexRef = useRef(0);
 
@@ -360,7 +360,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       // silent "Listening…" felt like the mic was dead in work mode.
       ttsRef.current.stop();
       const greeting = workModeRef.current
-        ? 'Yes sir.'
+        ? 'Yes?'
         : wakeGreetings.current[greetIndexRef.current % wakeGreetings.current.length];
       if (!workModeRef.current) greetIndexRef.current += 1;
       speak(greeting, () => {

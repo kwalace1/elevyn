@@ -11,10 +11,11 @@ import type { AIProviderRegistry } from './registry.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { MemoryService } from '../memory/store.js';
 
-const SYSTEM_PROMPT = `You are Elevyn, Kevin's formal AI aide and workspace operating system — calm, precise, loyal, like Jarvis.
-Address Kevin as "sir" in every spoken reply. Prefer formal confirmations such as: "Yes sir.", "No sir.", "Of course, sir.", "Right away, sir.", "Certainly, sir.", "At once, sir."
+const SYSTEM_PROMPT = `You are Elevyn, Kevin's AI aide and workspace operating system — calm, capable, a little like Jarvis without the stiff formality.
 Speak in short natural British English suitable for text-to-speech (1-2 sentences max).
-Be respectful and confident, never chatty or casual. Avoid slang. Never use markdown, bullet lists, or emoji.
+Be warm and confident. Default to plain confirmations: "Got it.", "On it.", "Done.", "Noted.", "Sure."
+You may use "sir" sparingly for flavour — not in every reply, and never stack it ("Got it. Noted, sir.").
+Avoid slang, markdown, bullet lists, and emoji.
 
 Respond with ONLY one JSON object on a single line, matching one of these shapes:
 
@@ -41,7 +42,7 @@ Valid surface ops:
 Just chatting or answering a question:
 {"type":"chat","reply":"<spoken answer>"}
 
-Prefer commands/surface actions when Kevin clearly wants an action. Always address him as sir.`;
+Prefer commands/surface actions when Kevin clearly wants an action. Keep replies brief.`;
 
 export class ElevynBrain {
   constructor(
@@ -56,7 +57,7 @@ export class ElevynBrain {
   ): Promise<InterpretedIntent> {
     const trimmed = utterance.trim();
     if (!trimmed) {
-      return { type: 'chat', reply: 'Pardon me, sir — I did not catch that.' };
+      return { type: 'chat', reply: 'Sorry — I did not catch that.' };
     }
 
     const local = this.matchLocalIntent(trimmed);
@@ -72,7 +73,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am online, sir, but no AI provider is available yet. Add an OpenRouter key, start Ollama, or try a command like open Cursor.',
+          'I am online, but no AI provider is available yet. Add an OpenRouter key, start Ollama, or try a command like open Cursor.',
       };
     }
 
@@ -100,7 +101,7 @@ export class ElevynBrain {
     } catch {
       return {
         type: 'chat',
-        reply: 'Forgive me, sir — something went wrong reaching the model. Your system commands still work.',
+        reply: 'Something went wrong reaching the model. Your system commands still work.',
       };
     }
   }
@@ -124,14 +125,14 @@ export class ElevynBrain {
       if (!app) {
         return {
           type: 'chat',
-          reply: `No sir — I am not sure which app you mean by ${raw}.`,
+          reply: `I am not sure which app you mean by ${raw}.`,
         };
       }
       return {
         type: 'command',
         commandId: 'open.app',
         args: { app },
-        reply: `Yes sir. Opening ${app}.`,
+        reply: `Opening ${app}.`,
       };
     }
 
@@ -148,7 +149,7 @@ export class ElevynBrain {
             type: 'command',
             commandId: 'close.app',
             args: { app },
-            reply: `Yes sir. Closing ${app}.`,
+            reply: `Closing ${app}.`,
           };
         }
       }
@@ -159,13 +160,13 @@ export class ElevynBrain {
         hour: 'numeric',
         minute: '2-digit',
       });
-      return { type: 'chat', reply: `It is ${time}, sir.` };
+      return { type: 'chat', reply: `It is ${time}.` };
     }
 
     if (/\b(who are you|what are you|introduce yourself)\b/i.test(lower)) {
       return {
         type: 'chat',
-        reply: 'I am Elevyn, sir — your workspace operating system. I am here when you need me.',
+        reply: 'I am Elevyn — your workspace operating system. I am here when you need me.',
       };
     }
 
@@ -178,7 +179,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'Quite a lot, sir. I take notes, track tasks and lists, run timers, and capture meetings as you speak. I open and close applications, remember things you tell me, summarize what is on screen, and copy it to your clipboard. Say "work mode" and I will set the stage.',
+          'Quite a bit. I take notes, track tasks and lists, run timers, and capture meetings as you speak. I open and close apps, remember things you tell me, summarize what is on screen, and copy it to your clipboard. Say "work mode" and I will set the stage.',
       };
     }
 
@@ -186,7 +187,7 @@ export class ElevynBrain {
       const hour = new Date().getHours();
       const greeting =
         hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-      return { type: 'chat', reply: `${greeting}, sir. How may I assist you?` };
+      return { type: 'chat', reply: `${greeting}. How can I help?` };
     }
 
     if (/\b(lock (the )?(mac|computer|screen)|lock screen)\b/i.test(lower)) {
@@ -194,7 +195,7 @@ export class ElevynBrain {
         type: 'command',
         commandId: 'system.lock',
         args: {},
-        reply: 'Yes sir. Locking your Mac.',
+        reply: 'Locking your Mac.',
       };
     }
 
@@ -203,7 +204,7 @@ export class ElevynBrain {
         type: 'command',
         commandId: 'system.sleep',
         args: {},
-        reply: 'Yes sir. Putting the Mac to sleep.',
+        reply: 'Putting the Mac to sleep.',
       };
     }
 
@@ -227,7 +228,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'work' },
-        reply: 'Yes sir.',
+        reply: 'Work mode.',
       };
     }
 
@@ -240,7 +241,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'dashboard' },
-        reply: 'Yes sir. Back to your dashboard.',
+        reply: 'Back to your dashboard.',
       };
     }
 
@@ -253,7 +254,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'clear' },
-        reply: 'Yes sir. Cleared.',
+        reply: 'Cleared.',
       };
     }
 
@@ -266,7 +267,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'createNote', text: text || undefined },
-        reply: text ? 'Yes sir. Noted.' : 'What should the note say, sir?',
+        reply: text ? 'Noted.' : 'What should the note say?',
         awaiting: text ? undefined : 'note',
       };
     }
@@ -285,7 +286,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'createTask', text: taskText || undefined },
-        reply: taskText ? "Yes sir. I'll track that." : 'What is the task, sir?',
+        reply: taskText ? "I'll track that." : 'What is the task?',
         awaiting: taskText ? undefined : 'task',
       };
     }
@@ -301,7 +302,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'startCapture' },
-        reply: 'Yes sir. Capturing.',
+        reply: 'Capturing.',
       };
     }
     if (
@@ -312,7 +313,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'stopCapture' },
-        reply: 'Yes sir. Capture stopped.',
+        reply: 'Capture stopped.',
       };
     }
 
@@ -335,7 +336,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'cancelTimer' },
-        reply: 'Yes sir. Timer cancelled.',
+        reply: 'Timer cancelled.',
       };
     }
     const timerMatch = lower.match(
@@ -347,12 +348,12 @@ export class ElevynBrain {
         return {
           type: 'surface',
           surface: { op: 'timer', seconds, title: formatDuration(seconds) },
-          reply: `Yes sir. Timer set for ${formatDuration(seconds)}.`,
+          reply: `Timer set for ${formatDuration(seconds)}.`,
         };
       }
       return {
         type: 'chat',
-        reply: 'For how long, sir?',
+        reply: 'For how long?',
         awaiting: 'timer',
       };
     }
@@ -376,7 +377,7 @@ export class ElevynBrain {
           title: items.length > 1 ? undefined : rest || undefined,
           items: items.length > 1 ? items : undefined,
         },
-        reply: 'Yes sir. List created.',
+        reply: 'List created.',
       };
     }
 
@@ -389,7 +390,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'removeLast' },
-        reply: 'Yes sir. Removed.',
+        reply: 'Removed.',
       };
     }
 
@@ -404,7 +405,7 @@ export class ElevynBrain {
         return {
           type: 'surface',
           surface: { op: 'addItem', text },
-          reply: 'Yes sir. Added.',
+          reply: 'Added.',
         };
       }
     }
@@ -429,7 +430,7 @@ export class ElevynBrain {
     if (rememberMatch) {
       const content = rememberMatch[1].replace(/[.!?]+$/, '').trim();
       if (!content) {
-        return { type: 'chat', reply: 'What should I remember, sir?' };
+        return { type: 'chat', reply: 'What should I remember?' };
       }
       if (this.memory) {
         try {
@@ -443,7 +444,7 @@ export class ElevynBrain {
           // If persistence fails we still acknowledge — memory is best-effort.
         }
       }
-      return { type: 'chat', reply: "Yes sir. I'll remember that." };
+      return { type: 'chat', reply: "I'll remember that." };
     }
 
     // Recall from memory.
@@ -458,15 +459,15 @@ export class ElevynBrain {
           const top = hits[0];
           return {
             type: 'chat',
-            reply: `Here is what I have, sir: ${top.content}`,
+            reply: `Here is what I have: ${top.content}`,
           };
         }
         return {
           type: 'chat',
-          reply: `I have nothing on ${query}, sir.`,
+          reply: `I have nothing on ${query}.`,
         };
       } catch {
-        return { type: 'chat', reply: 'I could not reach my memory, sir.' };
+        return { type: 'chat', reply: 'I could not reach my memory.' };
       }
     }
 
@@ -480,14 +481,14 @@ export class ElevynBrain {
       if (!source) {
         return {
           type: 'chat',
-          reply: 'There is nothing to summarize yet, sir.',
+          reply: 'There is nothing to summarize yet.',
         };
       }
       const summary = await this.summarize(source);
       return {
         type: 'surface',
         surface: { op: 'createNote', title: 'Summary', text: summary },
-        reply: `Here is your summary, sir. ${summary}`,
+        reply: `Here is your summary. ${summary}`,
       };
     }
 
@@ -499,7 +500,7 @@ export class ElevynBrain {
     ) {
       const source = (context ?? '').trim();
       if (!source) {
-        return { type: 'chat', reply: 'Nothing on screen yet, sir.' };
+        return { type: 'chat', reply: 'Nothing on screen yet.' };
       }
       const spoken = source.replace(/\n+/g, '. ').slice(0, 500);
       return { type: 'chat', reply: spoken };
@@ -513,11 +514,11 @@ export class ElevynBrain {
     ) {
       const source = (context ?? '').trim();
       if (!source) {
-        return { type: 'chat', reply: 'Nothing to copy yet, sir.' };
+        return { type: 'chat', reply: 'Nothing to copy yet.' };
       }
       return {
         type: 'chat',
-        reply: 'Yes sir. Copied to your clipboard.',
+        reply: 'Copied to your clipboard.',
         // Stash payload in args so the client can write it.
         args: { clipboard: source },
       };
@@ -607,7 +608,7 @@ export class ElevynBrain {
           return {
             type: 'surface',
             surface: parsed.surface,
-            reply: parsed.reply || 'Yes sir.',
+            reply: parsed.reply || 'Got it.',
           };
         }
         if (parsed.type === 'chat' && parsed.reply) {
@@ -645,7 +646,7 @@ export class ElevynBrain {
       .trim();
     return {
       type: 'chat',
-      reply: cleaned.slice(0, 280) || 'Understood, sir.',
+      reply: cleaned.slice(0, 280) || 'Understood.',
     };
   }
 }

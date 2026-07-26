@@ -121,7 +121,7 @@ export interface InterpretedIntent {
   reply: string;
   /**
    * Elevyn asked a question and is waiting for the answer as the next
-   * utterance (e.g. "What should the note say, sir?"). The client keeps the
+   * utterance (e.g. "What should the note say?"). The client keeps the
    * mic open and routes the reply straight into this slot.
    */
   awaiting?: 'note' | 'task' | 'list' | 'timer';

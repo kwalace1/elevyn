@@ -25,8 +25,8 @@ export function Shell() {
   });
 
   const focusGreeting = useMemo(() => {
-    if (elevyn.state === 'thinking') return 'One moment, sir…';
-    return `${greeting}, sir. How may I assist you?`;
+    if (elevyn.state === 'thinking') return 'One moment…';
+    return `${greeting}. How can I help?`;
   }, [elevyn.state, greeting]);
 
   useEffect(() => {
@@ -173,7 +173,7 @@ export function Shell() {
             onDismissPanel={surface.removePanel}
             onToggleItem={surface.toggleItem}
             onTimerComplete={() => {
-              elevyn.announce('Time, sir.');
+              elevyn.announce('Time.');
               window.setTimeout(surface.cancelTimer, 4000);
             }}
           />
