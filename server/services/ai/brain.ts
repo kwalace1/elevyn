@@ -29,7 +29,8 @@ Speak short British English suitable for text-to-speech (1-2 sentences max).
 Confirmations: "Certainly.", "Of course.", "Right away.", "Noted.", "Understood.", "Done."
 You may use "sir" sparingly for flavour — not every reply, never stacked.
 Avoid slang, markdown, bullet lists, and emoji.
-Use SESSION FACTS and RECENT CONVERSATION when present. Prefer on-screen panels when he refers to "that", "this", or the meeting.
+Use SESSION FACTS, DURABLE MEMORY, and TODAY'S AGENDA when present. Prefer on-screen panels when he refers to "that", "this", or the meeting.
+Answer "what's next" / "am I free" from the agenda. Treat durable memory as long-term knowledge about Kevin's work and people.
 
 Respond with ONLY one JSON object on a single line, matching one of these shapes:
 
@@ -206,7 +207,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am your sidekick. Ask me anything, remember facts for this session, take notes and tasks, run timers, and capture meetings. Say "catch me up" anytime, or "wrap up the meeting" when you are done. Work mode clears the stage when you need focus.',
+          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Tell me what is on your calendar, or ask what is next. Say "catch me up" anytime.',
       };
     }
 
@@ -464,7 +465,7 @@ export class ElevynBrain {
       };
     }
 
-    // Catch-me-up from session + on-screen context.
+    // Catch-me-up from session + durable memory + agenda + on-screen context.
     if (
       /\b(where were we|catch me up|brief me|status (update|report)|what (have|did) we (been )?(doing|discussing|talking about)|what'?s (going )?on( with (this|the) session)?|recap (the )?session)\b/i.test(
         lower,
@@ -478,6 +479,36 @@ export class ElevynBrain {
       }
       const brief = await this.briefSession(ctx);
       return { type: 'chat', reply: brief };
+    }
+
+    // Day agenda — what's next / am I free / what's on today.
+    if (
+      /\b(what'?s next|what is next|what'?s coming up|what do i have (today|next)|am i free|am i busy|what'?s on (my )?(calendar|agenda|schedule)( today)?|what('?s| is) (on )?today)\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'chat',
+        reply: agendaReply(ctx, lower.includes('free')),
+      };
+    }
+
+    // Schedule something by voice — client persists into durable agenda.
+    const scheduleMatch = original.match(
+      /^(?:please\s+)?(?:(?:can you |could you )?(?:schedule|add|put|book)|i(?:'?ve| have) got|i have)\b.+$/i,
+    );
+    if (
+      scheduleMatch &&
+      /\b(meeting|call|appointment|interview|standup|sync|lunch|dinner|coffee|demo|session|calendar|agenda)\b/i.test(
+        lower,
+      ) &&
+      /\b(?:at|for)\s+(\d{1,2}|noon|midnight)/i.test(lower)
+    ) {
+      return {
+        type: 'chat',
+        reply: 'I will put that on your agenda.',
+        args: { scheduleUtterance: original },
+      };
     }
 
     // Wrap up a meeting: summary note + action-item tasks + stop capture.
@@ -553,16 +584,23 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply: "Certainly. I'll remember that.",
-        args: { sessionFact: content },
+        args: { sessionFact: content, durableFact: content },
       };
     }
 
-    // Recall from durable memory, then fall back to session facts in context.
+    // Recall from durable memory (in context), then server memory, then session.
     const recallMatch = original.match(
       /^(?:what do you know about|what do you remember about|what did i say about|do you remember|recall|remind me (?:about|of)|tell me about)\s+(.+)$/i,
     );
     if (recallMatch) {
       const query = recallMatch[1].replace(/[.!?]+$/, '').trim();
+      const fromDurable = findDurableFact(ctx, query);
+      if (fromDurable) {
+        return {
+          type: 'chat',
+          reply: `Here is what I have: ${fromDurable}`,
+        };
+      }
       if (this.memory) {
         try {
           const hits = await this.memory.search(query);
@@ -573,7 +611,7 @@ export class ElevynBrain {
             };
           }
         } catch {
-          // fall through to session facts
+          // fall through
         }
       }
       const fromSession = findSessionFact(ctx, query);
@@ -653,15 +691,15 @@ export class ElevynBrain {
             {
               role: 'system',
               content:
-                'You are Elevyn. Give Kevin a crisp 2-sentence spoken brief of where things stand from the session context. British English, no markdown, no lists. Start naturally — no "Certainly" filler.',
+                'You are Elevyn. Give Kevin a crisp 2-sentence spoken brief of where things stand. Use durable memory, today\'s agenda, recent conversation, and on-screen panels when present. British English, no markdown, no lists. Start naturally — no filler.',
             },
             { role: 'user', content: context },
           ],
           temperature: 0.3,
-          maxTokens: 180,
+          maxTokens: 200,
         });
         const text = completion.content.trim().replace(/\s+/g, ' ');
-        if (text) return text.slice(0, 400);
+        if (text) return text.slice(0, 420);
       } catch {
         // fall through
       }
@@ -843,13 +881,56 @@ function extractOnScreen(context: string): string {
     // Legacy plain context (panels only).
     if (
       context.includes('=== SESSION FACTS ===') ||
-      context.includes('=== RECENT CONVERSATION ===')
+      context.includes('=== RECENT CONVERSATION ===') ||
+      context.includes('=== DURABLE MEMORY ===') ||
+      context.includes("=== TODAY'S AGENDA ===")
     ) {
       return '';
     }
     return context.trim();
   }
   return context.slice(idx + marker.length).trim();
+}
+
+function extractSection(context: string, marker: string): string {
+  const idx = context.indexOf(marker);
+  if (idx === -1) return '';
+  const rest = context.slice(idx + marker.length);
+  const next = rest.search(/\n=== /);
+  return (next === -1 ? rest : rest.slice(0, next)).trim();
+}
+
+function agendaReply(context: string, askingIfFree: boolean): string {
+  const block = extractSection(context, "=== TODAY'S AGENDA ===");
+  if (!block) {
+    return askingIfFree
+      ? 'I do not have anything on your agenda yet. Tell me what is coming up and I will track it.'
+      : 'Your agenda is clear from here. Tell me about a meeting and I will remember it.';
+  }
+  const lines = block
+    .split('\n')
+    .map((l) => l.replace(/^-\s*/, '').trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    return 'Your agenda is clear from here.';
+  }
+  if (askingIfFree) {
+    return `You have ${lines.length} upcoming item${lines.length === 1 ? '' : 's'}. Next: ${lines[0]}.`;
+  }
+  if (lines.length === 1) return `Next up: ${lines[0]}.`;
+  return `Next up: ${lines[0]}. After that: ${lines[1]}.`;
+}
+
+function findDurableFact(context: string, query: string): string | null {
+  const block = extractSection(context, '=== DURABLE MEMORY ===');
+  if (!block) return null;
+  const needle = query.toLowerCase();
+  const facts = block
+    .split('\n')
+    .map((l) => l.replace(/^-+\s*(?:\[[^\]]+\]\s*)?/, '').trim())
+    .filter(Boolean);
+  const hit = facts.find((f) => f.toLowerCase().includes(needle));
+  return hit ?? null;
 }
 
 function extractLastElevynLine(context: string): string | null {
@@ -881,16 +962,29 @@ function findSessionFact(context: string, query: string): string | null {
 }
 
 function extractiveBrief(context: string): string {
-  const facts = findAllSessionFacts(context);
-  const screen = extractOnScreen(context);
   const bits: string[] = [];
-  if (facts.length) {
-    bits.push(`You asked me to remember: ${facts.slice(0, 2).join('; ')}.`);
+  const agenda = extractSection(context, "=== TODAY'S AGENDA ===")
+    .split('\n')
+    .map((l) => l.replace(/^-\s*/, '').trim())
+    .filter(Boolean);
+  if (agenda[0]) bits.push(`Next on your agenda: ${agenda[0]}.`);
+
+  const durable = extractSection(context, '=== DURABLE MEMORY ===')
+    .split('\n')
+    .map((l) => l.replace(/^-+\s*(?:\[[^\]]+\]\s*)?/, '').trim())
+    .filter(Boolean);
+  const facts = findAllSessionFacts(context);
+  const remembered = [...facts, ...durable].slice(0, 2);
+  if (remembered.length) {
+    bits.push(`You asked me to remember: ${remembered.join('; ')}.`);
   }
+
+  const screen = extractOnScreen(context);
   if (screen) {
-    const snippet = screen.replace(/\s+/g, ' ').slice(0, 180);
-    bits.push(`On screen: ${snippet}${screen.length > 180 ? '…' : ''}`);
+    const snippet = screen.replace(/\s+/g, ' ').slice(0, 160);
+    bits.push(`On screen: ${snippet}${screen.length > 160 ? '…' : ''}`);
   }
+
   if (!bits.length) {
     const convo = context.match(/=== RECENT CONVERSATION ===\n([\s\S]+)/);
     if (convo?.[1]) {
@@ -899,7 +993,7 @@ function extractiveBrief(context: string): string {
     }
     return 'Quiet session so far. I am standing by.';
   }
-  return bits.join(' ').slice(0, 400);
+  return bits.join(' ').slice(0, 420);
 }
 
 function findAllSessionFacts(context: string): string[] {

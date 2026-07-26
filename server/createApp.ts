@@ -20,6 +20,7 @@ import {
   createVoiceRouter,
 } from './routes/index.js';
 import { isHosted, isMac } from './services/platform.js';
+import { fetchCalendarEvents } from './services/calendar/ics.js';
 
 const ALLOWED_ORIGINS = (process.env.ELEVYN_ALLOWED_ORIGINS ?? '')
   .split(',')
@@ -136,6 +137,21 @@ export function createApp(): Express {
         },
       ],
     });
+  });
+
+  app.get('/api/calendar', async (_req, res) => {
+    const icsUrl = process.env.ELEVYN_CALENDAR_ICS?.trim();
+    if (!icsUrl) {
+      res.json({ configured: false, events: [] });
+      return;
+    }
+    try {
+      const events = await fetchCalendarEvents(icsUrl);
+      res.json({ configured: true, events });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Calendar unavailable';
+      res.status(502).json({ configured: true, error: message, events: [] });
+    }
   });
 
   app.use('/api/ai', createAiRouter(brain, ai, commands));

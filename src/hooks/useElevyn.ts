@@ -4,10 +4,12 @@ import { elevynApi } from '../services/api/client';
 import { BrowserSpeechRecognition } from '../services/voice/recognition';
 import { ElevynSpeech } from '../services/voice/elevynSpeech';
 import { SessionMemory } from '../services/session/memory';
+import { DurableMemory } from '../services/memory/durable';
 import {
   buildPresenceSnapshot,
   buildWakeBrief,
 } from '../services/presence/brief';
+import { formatAgendaWhen, parseSpokenAgenda } from '../utils/agendaParse';
 import {
   isEchoOfReply,
   matchAddress,
@@ -42,10 +44,13 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const [brainOnline, setBrainOnline] = useState(false);
   const [aiProvider, setAiProvider] = useState<string | null>(null);
   const [armed, setArmed] = useState(true);
+  /** Bumps when durable agenda/memory changes so UI status can refresh. */
+  const [memoryEpoch, setMemoryEpoch] = useState(0);
 
   const recognitionRef = useRef(new BrowserSpeechRecognition());
   const ttsRef = useRef(new ElevynSpeech());
   const sessionRef = useRef(new SessionMemory());
+  const durableRef = useRef(new DurableMemory());
   const processingRef = useRef(false);
   const phaseRef = useRef<ListenPhase>('wake');
   const stateRef = useRef<ElevynState>('idle');
@@ -235,7 +240,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       try {
         const panelContext = getContextRef.current?.();
         const sessionBlock = sessionRef.current.toContextBlock();
+        const durableBlock = durableRef.current.toContextBlock();
         const contextParts = [
+          durableBlock,
           sessionBlock,
           panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
         ].filter(Boolean);
@@ -246,13 +253,37 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         sessionRef.current.addTurn('user', toSend);
         const { intent, execution } = await elevynApi.interpret(toSend, context);
 
-        // Session bookkeeping from brain args.
+        // Session / durable bookkeeping from brain args.
         if (intent.args?.clearSession === true) {
           sessionRef.current.clear();
         }
         const fact = intent.args?.sessionFact;
         if (typeof fact === 'string' && fact.trim()) {
           sessionRef.current.addFact(fact);
+        }
+        const durableFact = intent.args?.durableFact;
+        if (typeof durableFact === 'string' && durableFact.trim()) {
+          durableRef.current.addFact(durableFact);
+          setMemoryEpoch((n) => n + 1);
+        }
+
+        // Voice-scheduled agenda item.
+        const scheduleUtterance = intent.args?.scheduleUtterance;
+        if (typeof scheduleUtterance === 'string') {
+          const parsed = parseSpokenAgenda(scheduleUtterance);
+          if (parsed) {
+            durableRef.current.addEvent({
+              title: parsed.title,
+              start: parsed.startIso,
+              end: parsed.endIso,
+              source: 'voice',
+            });
+            intent.reply = `Noted. ${parsed.title} at ${formatAgendaWhen(parsed.startIso)}.`;
+            setMemoryEpoch((n) => n + 1);
+          } else {
+            intent.reply =
+              'I caught that you want something on the agenda, but I need a time — for example, meeting with Sarah at 3.';
+          }
         }
 
         // Flip the surface immediately so work mode never looks "stuck loading"
@@ -437,7 +468,15 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       ttsRef.current.stop();
       speakingReplyRef.current = '';
       const panels = getPanelsRef.current?.() ?? [];
-      const snap = buildPresenceSnapshot(panels, sessionRef.current.snapshot());
+      const next = durableRef.current.upcoming(18)[0];
+      const nextAgenda = next
+        ? `${next.title} at ${formatAgendaWhen(next.start)}`
+        : null;
+      const snap = buildPresenceSnapshot(
+        panels,
+        sessionRef.current.snapshot(),
+        nextAgenda,
+      );
       const now = Date.now();
       const briefFresh = now - lastBriefAtRef.current > 80_000;
       const brief =
@@ -702,6 +741,36 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     };
   }, []);
 
+  // Optional ICS calendar → durable agenda (when ELEVYN_CALENDAR_ICS is set).
+  useEffect(() => {
+    if (!brainOnline) return;
+    let cancelled = false;
+
+    const sync = async () => {
+      try {
+        const payload = await elevynApi.calendar();
+        if (cancelled || !payload.configured || !payload.events?.length) return;
+        durableRef.current.mergeCalendarEvents(
+          payload.events.map((e) => ({
+            title: e.title,
+            start: e.start,
+            end: e.end,
+          })),
+        );
+        setMemoryEpoch((n) => n + 1);
+      } catch {
+        // Calendar is optional — voice agenda still works.
+      }
+    };
+
+    void sync();
+    const id = window.setInterval(sync, 15 * 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [brainOnline]);
+
   // Bootstrap / re-arm wake listening when online — do not tie to every state change.
   useEffect(() => {
     if (!armed || !brainOnline || !recognitionRef.current.supported) {
@@ -817,6 +886,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     brainOnline,
     aiProvider,
     armed,
+    memoryEpoch,
     speechSupported: recognitionRef.current.supported,
     startListening,
     stopListening,
@@ -825,5 +895,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     processUtterance,
     announce,
     getSessionSnapshot: () => sessionRef.current.snapshot(),
+    getDurableSnapshot: () => durableRef.current.snapshot(),
+    getUpcomingAgenda: () => durableRef.current.upcoming(36),
   };
 }

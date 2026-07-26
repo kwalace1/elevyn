@@ -74,4 +74,11 @@ export const elevynApi = {
         q ? `/api/memory?q=${encodeURIComponent(q)}` : '/api/memory',
       ),
   },
+
+  calendar: () =>
+    request<{
+      configured: boolean;
+      events: Array<{ title: string; start: string; end?: string }>;
+      error?: string;
+    }>('/api/calendar'),
 };

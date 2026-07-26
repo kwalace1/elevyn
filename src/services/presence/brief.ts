@@ -14,11 +14,14 @@ export interface PresenceSnapshot {
   timerTitle: string | null;
   factCount: number;
   recentTurns: number;
+  /** Next agenda line already formatted for speech, if any. */
+  nextAgenda: string | null;
 }
 
 export function buildPresenceSnapshot(
   panels: SurfacePanel[],
   session: { facts: string[]; turns: unknown[] },
+  nextAgenda: string | null = null,
 ): PresenceSnapshot {
   const tasks = panels.find((p) => p.kind === 'task');
   const openItems = (tasks?.items ?? []).filter((it) => !it.done);
@@ -41,6 +44,7 @@ export function buildPresenceSnapshot(
     timerTitle: timer?.title ?? null,
     factCount: session.facts.length,
     recentTurns: session.turns.length,
+    nextAgenda,
   };
 }
 
@@ -58,6 +62,10 @@ export function buildWakeBrief(
   greeting: 'morning' | 'afternoon' | 'evening' | 'generic' = 'generic',
 ): string | null {
   const cues: string[] = [];
+
+  if (snap.nextAgenda) {
+    cues.push(`Next up: ${snap.nextAgenda}.`);
+  }
 
   if (snap.capturing) {
     cues.push(
@@ -105,6 +113,7 @@ export function buildWakeBrief(
 /** Quiet status line under the brand (not spoken). */
 export function buildPresenceStatus(snap: PresenceSnapshot): string {
   const bits: string[] = [];
+  if (snap.nextAgenda) bits.push(`Next: ${snap.nextAgenda}`);
   if (snap.capturing) bits.push('Capture live');
   if (snap.timerSecondsLeft != null && snap.timerSecondsLeft > 0) {
     bits.push(`Timer ${formatMinutesLeft(snap.timerSecondsLeft)}`);

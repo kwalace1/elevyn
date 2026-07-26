@@ -32,12 +32,20 @@ export function Shell() {
 
   const presenceStatus = useMemo(() => {
     const session = elevyn.getSessionSnapshot();
+    const next = elevyn.getUpcomingAgenda()[0];
+    const nextAgenda = next
+      ? `${next.title} · ${new Date(next.start).toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          timeZone: 'America/New_York',
+        })}`
+      : null;
     return buildPresenceStatus(
-      buildPresenceSnapshot(surface.panels, session),
+      buildPresenceSnapshot(surface.panels, session, nextAgenda),
     );
-    // Session snapshot is read live; panels drive recompute.
+    // Session/agenda snapshots are read live; panels + replies drive recompute.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surface.panels, elevyn.response, elevyn.transcript]);
+  }, [surface.panels, elevyn.response, elevyn.transcript, elevyn.memoryEpoch]);
 
   const focusGreeting = useMemo(() => {
     if (elevyn.state === 'thinking') return 'One moment…';
