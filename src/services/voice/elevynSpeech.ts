@@ -62,7 +62,7 @@ export class ElevynSpeech implements TextToSpeechService {
     const watchdog = window.setTimeout(finish, 12_000);
 
     try {
-      const res = await fetch(`${API_BASE}/api/voice/speak`, {
+      const res = await fetch(`${API_BASE}/api/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ text: trimmed }),

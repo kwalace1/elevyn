@@ -143,6 +143,11 @@ export function createApp(): Express {
   app.use('/api/memory', createMemoryRouter(memory));
   app.use('/api/voice', createVoiceRouter());
 
+  // Flat aliases — Vercel's catch-all serves /api/:segment but 404s on
+  // /api/:a/:b (e.g. /api/ai/interpret). Same-origin UI uses these.
+  app.use('/api', createAiRouter(brain, ai, commands));
+  app.use('/api', createVoiceRouter());
+
   cachedApp = app;
   return app;
 }

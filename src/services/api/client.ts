@@ -58,7 +58,7 @@ export const elevynApi = {
     request<{
       intent: InterpretedIntent;
       execution: CommandExecutionResult | null;
-    }>('/api/ai/interpret', {
+    }>('/api/interpret', {
       method: 'POST',
       body: JSON.stringify({ utterance, context }),
     }),
@@ -66,7 +66,7 @@ export const elevynApi = {
   providers: () =>
     request<{
       providers: Array<{ id: string; displayName: string; available: boolean }>;
-    }>('/api/ai/providers'),
+    }>('/api/providers'),
 
   memory: {
     list: (q?: string) =>
