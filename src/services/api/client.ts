@@ -11,14 +11,25 @@ import type {
 import { API_BASE, authHeaders } from './config';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-      ...(init?.headers ?? {}),
-    },
-  });
+  const fetchOnce = () =>
+    fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+        ...(init?.headers ?? {}),
+      },
+    });
+
+  let res: Response;
+  try {
+    res = await fetchOnce();
+  } catch {
+    // Local hot reloads and Vercel cold starts can briefly drop the first
+    // connection. Retry once instead of telling Kevin the brain is unreachable.
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    res = await fetchOnce();
+  }
 
   if (!res.ok) {
     const text = await res.text();
