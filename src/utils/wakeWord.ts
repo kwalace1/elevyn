@@ -1,25 +1,80 @@
 /**
  * Wake-word matching for Elevyn.
  *
- * Browser STT mangles "Elevyn" constantly — keep a wide alias net.
- * Recognition engines can swap later (Porcupine, etc.).
+ * Browser STT mangles "Elevyn" constantly — keep a wide alias net plus light
+ * fuzzy matching on name-like tokens. Recognition engines can swap later
+ * (Porcupine, etc.).
  */
 
-/** Common STT renderings of the name Elevyn. */
-const NAME =
-  '(?:elevyn|eleven|elevan|elevin|elevon|elevation|evelyn|ellen|levin|alevin|oliven|elevynn|elevenn|a ?eleven|11)';
+/** Common wake greetings STT may attach before the name. */
+const GREETING_WORDS = new Set(['hey', 'hi', 'ok', 'okay', 'yo', 'hello']);
+const EXACT_NAME =
+  /^(?:elevyn|eleven|elevan|elevin|elevon|elevation|evelyn|ellen|elevynn|elevenn|elevene|elevum|eleva|11)$/i;
 
-const WAKE_PHRASE = new RegExp(
-  String.raw`\b(?:hey|hi|ok|okay|yo|hello)\s+${NAME}\b`,
-  'i',
-);
+/** Canonical forms for edit-distance checks (avoid short/ambiguous targets). */
+const FUZZY_TARGETS = [
+  'elevyn',
+  'eleven',
+  'evelyn',
+  'elevan',
+  'elevin',
+  'elevon',
+  'elevation',
+  'elevynn',
+  'elevenn',
+];
 
-const BARE_WAKE = new RegExp(String.raw`^(?:${NAME})\b`, 'i');
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const row = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) row[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = row[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + cost);
+      prev = tmp;
+    }
+  }
+  return row[b.length];
+}
 
-const ADDRESS_ANYWHERE = new RegExp(
-  String.raw`\b(?:(?:hey|hi|ok|okay|yo|hello)\s+)?${NAME}\b`,
-  'i',
-);
+/**
+ * True when a single STT token is (or is close to) Elevyn.
+ * Kept strict on shape so common words like "oliver" / "even" do not wake.
+ */
+export function isElevynNameToken(token: string): boolean {
+  const w = token.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!w) return false;
+  if (w === '11') return true;
+  if (EXACT_NAME.test(w)) return true;
+  if (w.length < 5 || w.length > 11) return false;
+  // Must look like Elevyn / Eleven family — not arbitrary English.
+  if (!/^e[lv]/.test(w)) return false;
+  return FUZZY_TARGETS.some((t) => {
+    const max = t.length <= 6 ? 1 : 2;
+    return levenshtein(w, t) <= max;
+  });
+}
+
+/** Score how strongly a transcript looks like it contains the wake name. */
+export function elevynNameScore(text: string): number {
+  const words = normalizeTranscript(text).split(' ').filter(Boolean);
+  let score = 0;
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] === 'a' && words[i + 1] && isElevynNameToken(words[i + 1])) {
+      score += 120;
+      i += 1;
+      continue;
+    }
+    if (isElevynNameToken(words[i])) score += 100;
+  }
+  return score;
+}
 
 export function normalizeTranscript(text: string): string {
   return text
@@ -29,6 +84,18 @@ export function normalizeTranscript(text: string): string {
     .trim();
 }
 
+function findNameSpan(words: string[]): { start: number; end: number } | null {
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] === 'a' && words[i + 1] && isElevynNameToken(words[i + 1])) {
+      return { start: i, end: i + 2 };
+    }
+    if (isElevynNameToken(words[i])) {
+      return { start: i, end: i + 1 };
+    }
+  }
+  return null;
+}
+
 export function matchWakeWord(transcript: string): {
   heard: boolean;
   remainder: string;
@@ -36,19 +103,20 @@ export function matchWakeWord(transcript: string): {
   const normalized = normalizeTranscript(transcript);
   if (!normalized) return { heard: false, remainder: '' };
 
-  const phraseMatch = normalized.match(WAKE_PHRASE);
-  if (phraseMatch && phraseMatch.index !== undefined) {
-    const after = normalized
-      .slice(phraseMatch.index + phraseMatch[0].length)
-      .trim();
+  const words = normalized.split(' ').filter(Boolean);
+  const span = findNameSpan(words);
+  if (!span) return { heard: false, remainder: normalized };
+
+  const before = words.slice(0, span.start);
+  const after = words.slice(span.end).join(' ').trim();
+
+  // "Hey Elevyn …" / "Okay Elevyn …"
+  if (before.length === 1 && GREETING_WORDS.has(before[0])) {
     return { heard: true, remainder: after };
   }
-
-  if (BARE_WAKE.test(normalized)) {
-    return {
-      heard: true,
-      remainder: normalized.replace(BARE_WAKE, '').trim(),
-    };
+  // Bare name at the start: "Elevyn open notes"
+  if (before.length === 0) {
+    return { heard: true, remainder: after };
   }
 
   return { heard: false, remainder: normalized };
@@ -68,33 +136,42 @@ export function matchAddress(
   const normalized = normalizeTranscript(transcript);
   if (!normalized) return { heard: false, remainder: '' };
 
-  const match = normalized.match(ADDRESS_ANYWHERE);
-  if (match && match.index !== undefined) {
-    const after = normalized.slice(match.index + match[0].length).trim();
-    return { heard: true, remainder: after };
-  }
+  const words = normalized.split(' ').filter(Boolean);
+  const span = findNameSpan(words);
+  if (!span) return { heard: false, remainder: normalized };
 
-  return { heard: false, remainder: normalized };
+  // Drop an optional greeting immediately before the name.
+  let start = span.start;
+  if (start > 0 && GREETING_WORDS.has(words[start - 1])) start -= 1;
+
+  const after = words.slice(span.end).join(' ').trim();
+  return { heard: true, remainder: after };
 }
 
 /**
  * Interrupt words that halt Elevyn mid-speech, with or without the name.
  * "Elevyn stop" / "stop" / "hold on" all cut speech instantly.
  */
-const STOP_COMMAND = new RegExp(
-  String.raw`^(?:(?:hey\s+)?${NAME}[\s,]+)?(?:stop|wait|hold on|hang on|shut up|quiet|silence|enough|pause|never ?mind|cancel|that'?s enough)$`,
-  'i',
-);
+const STOP_BARE =
+  /^(?:stop|wait|hold on|hang on|shut up|quiet|silence|enough|pause|never ?mind|cancel|that'?s enough)$/i;
 
 export function matchStopCommand(transcript: string): boolean {
   const normalized = normalizeTranscript(transcript);
   if (!normalized) return false;
-  if (STOP_COMMAND.test(normalized)) return true;
-  // Chrome accumulates the session transcript — also check the trailing words
-  // so "…background noise… elevyn stop" still registers.
-  const words = normalized.split(' ');
-  for (let take = 1; take <= Math.min(3, words.length); take++) {
-    if (STOP_COMMAND.test(words.slice(-take).join(' '))) return true;
+
+  const words = normalized.split(' ').filter(Boolean);
+  const check = (slice: string[]) => {
+    if (!slice.length) return false;
+    let i = 0;
+    if (GREETING_WORDS.has(slice[0])) i += 1;
+    if (i < slice.length && isElevynNameToken(slice[i])) i += 1;
+    const rest = slice.slice(i).join(' ');
+    return STOP_BARE.test(rest);
+  };
+
+  if (check(words)) return true;
+  for (let take = 1; take <= Math.min(4, words.length); take++) {
+    if (check(words.slice(-take))) return true;
   }
   return false;
 }
@@ -108,9 +185,11 @@ export function isEchoOfReply(heard: string, reply: string): boolean {
   const words = (s: string) => normalizeTranscript(s).split(' ').filter(Boolean);
   const heardWords = words(heard);
   if (!heardWords.length) return true;
+  // Short barge-ins ("stop", "wait", "Elevyn") must never look like echoes.
+  if (heardWords.length <= 2) return false;
   const replySet = new Set(words(reply));
   const hits = heardWords.filter((w) => replySet.has(w)).length;
-  return hits / heardWords.length >= 0.7;
+  return hits / heardWords.length >= 0.75;
 }
 
 /**

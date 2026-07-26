@@ -585,7 +585,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const wakeGreetings = useRef([
     'Yes?',
     'Go ahead.',
-    'At your service.',
+    "I'm here.",
+    'Listening.',
   ]);
   const greetIndexRef = useRef(0);
 
@@ -751,7 +752,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         clearWakeCommit();
         wakeCommitRef.current = window.setTimeout(
           () => commitWake(remainder),
-          isFinal ? 120 : 450,
+          isFinal ? 80 : 320,
         );
         return;
       }
@@ -760,7 +761,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearWakeCommit();
       wakeCommitRef.current = window.setTimeout(
         () => commitWake(),
-        isFinal ? 150 : 700,
+        isFinal ? 100 : 520,
       );
     },
     [

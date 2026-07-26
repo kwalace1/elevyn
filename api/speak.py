@@ -14,14 +14,16 @@ import edge_tts
 
 
 VOICE = os.environ.get("ELEVYN_TTS_VOICE", "en-GB-SoniaNeural")
+RATE = os.environ.get("ELEVYN_TTS_RATE", "-4%")
+PITCH = os.environ.get("ELEVYN_TTS_PITCH", "-2Hz")
 
 
 async def synthesize(text: str, output: str) -> None:
     communicate = edge_tts.Communicate(
         text=text,
         voice=VOICE,
-        rate="-4%",
-        pitch="-2Hz",
+        rate=RATE,
+        pitch=PITCH,
         volume="+0%",
     )
     await communicate.save(output)
@@ -62,4 +64,3 @@ class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.end_headers()
-

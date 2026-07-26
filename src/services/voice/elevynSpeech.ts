@@ -10,10 +10,19 @@ import type { TextToSpeechService } from './synthesis';
 import { BrowserTextToSpeech } from './synthesis';
 import { API_BASE, authHeaders } from '../api/config';
 
+/** Soften punctuation so Sonia cadence stays natural. */
+function humanizeForSpeech(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/\s*[—–]\s*/g, ', ')
+    .replace(/;\s*/g, '. ')
+    .replace(/:\s+/g, ', ')
+    .trim();
+}
+
 /** Split a reply into speakable chunks (sentences, merged when tiny). */
 function chunkText(text: string): string[] {
-  const sentences = text
-    .replace(/\s+/g, ' ')
+  const sentences = humanizeForSpeech(text)
     .split(/(?<=[.!?…])\s+/)
     .map((s) => s.trim())
     .filter(Boolean);
@@ -23,7 +32,14 @@ function chunkText(text: string): string[] {
   for (const sentence of sentences) {
     if (!current) {
       current = sentence;
-    } else if (current.length < 60 || current.length + sentence.length < 140) {
+      // Prefer a short first chunk so Sonia starts sooner.
+      if (current.length >= 28 || /[.!?…]$/.test(current)) {
+        chunks.push(current);
+        current = '';
+      }
+      continue;
+    }
+    if (current.length < 50 || current.length + sentence.length < 120) {
       current += ' ' + sentence;
     } else {
       chunks.push(current);
@@ -31,7 +47,7 @@ function chunkText(text: string): string[] {
     }
   }
   if (current) chunks.push(current);
-  return chunks.length ? chunks : [text];
+  return chunks.length ? chunks : [humanizeForSpeech(text)];
 }
 
 export class ElevynSpeech implements TextToSpeechService {
@@ -183,15 +199,25 @@ export class ElevynSpeech implements TextToSpeechService {
   }
 
   private async fetchChunk(text: string): Promise<Blob> {
-    const res = await fetch(`${API_BASE}/api/speak`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
-    const contentType = res.headers.get('Content-Type') ?? 'audio/mpeg';
-    const buffer = await res.arrayBuffer();
-    return new Blob([buffer], { type: contentType });
+    const attempt = async (): Promise<Blob> => {
+      const res = await fetch(`${API_BASE}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
+      const contentType = res.headers.get('Content-Type') ?? 'audio/mpeg';
+      const buffer = await res.arrayBuffer();
+      return new Blob([buffer], { type: contentType });
+    };
+
+    try {
+      return await attempt();
+    } catch {
+      // One quick retry before surrendering to robotic browser TTS.
+      await new Promise((r) => window.setTimeout(r, 160));
+      return attempt();
+    }
   }
 
   private playBlob(blob: Blob, session: number): Promise<void> {

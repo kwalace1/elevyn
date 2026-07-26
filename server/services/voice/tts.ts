@@ -18,22 +18,27 @@ const execFileAsync = promisify(execFile);
  */
 
 const EDGE_VOICE = process.env.ELEVYN_TTS_VOICE ?? 'en-GB-SoniaNeural';
+/** Match Vercel api/speak.py so local and hosted Sonia sound the same. */
+const EDGE_RATE = process.env.ELEVYN_TTS_RATE ?? '-4%';
+const EDGE_PITCH = process.env.ELEVYN_TTS_PITCH ?? '-2Hz';
 const SAY_FALLBACK = process.env.ELEVYN_SAY_VOICE ?? 'Daniel';
 const PYTHON = process.env.ELEVYN_PYTHON ?? 'python3';
 
 const PREWARM_PHRASES = [
   'Yes?',
   'Go ahead.',
-  'At your service.',
+  "I'm here.",
+  'Listening.',
   'Certainly.',
   'Of course.',
   'Noted.',
+  'On it.',
   "I'll track that.",
   'List created.',
-  'Cleared.',
+  'Screen cleared.',
   'Back to your dashboard.',
-  'Work mode.',
-  'Capturing.',
+  'Work mode. Ready when you are.',
+  'Listening in.',
   'Capture stopped.',
   'Added.',
   'Removed.',
@@ -69,22 +74,32 @@ async function synthesizeEdge(text: string, voice: string): Promise<Buffer> {
   const out = path.join(dir, `${randomUUID()}.mp3`);
 
   // edge-tts is a free Microsoft neural TTS client (no API key).
+  // rate/pitch match Vercel so Sonia sounds identical everywhere.
   const script = `
 import asyncio, edge_tts, sys
 async def main():
-    communicate = edge_tts.Communicate(sys.argv[1], sys.argv[2])
+    communicate = edge_tts.Communicate(
+        sys.argv[1],
+        sys.argv[2],
+        rate=sys.argv[4],
+        pitch=sys.argv[5],
+    )
     await communicate.save(sys.argv[3])
 asyncio.run(main())
 `;
 
   try {
-    await execFileAsync(PYTHON, ['-c', script, text, voice, out], {
-      timeout: 20_000,
-      env: {
-        ...process.env,
-        PATH: `${process.env.HOME}/Library/Python/3.9/bin:${process.env.PATH ?? ''}`,
+    await execFileAsync(
+      PYTHON,
+      ['-c', script, text, voice, out, EDGE_RATE, EDGE_PITCH],
+      {
+        timeout: 20_000,
+        env: {
+          ...process.env,
+          PATH: `${process.env.HOME}/Library/Python/3.9/bin:${process.env.PATH ?? ''}`,
+        },
       },
-    });
+    );
     return await readFile(out);
   } finally {
     await rm(out, { force: true }).catch(() => undefined);
@@ -117,7 +132,7 @@ export async function synthesizeSpeech(text: string): Promise<AudioPayload> {
   const spoken = normalizeSpoken(text);
   if (!spoken) throw new Error('Nothing to speak.');
 
-  const key = cacheKey(spoken, EDGE_VOICE);
+  const key = cacheKey(spoken, `${EDGE_VOICE}|${EDGE_RATE}|${EDGE_PITCH}`);
   const hit = cache.get(key);
   if (hit) return { ...hit, cached: true };
 

@@ -4,6 +4,8 @@
  * Future: Whisper.cpp / Porcupine implementing the same interface.
  */
 
+import { elevynNameScore } from '../../utils/wakeWord';
+
 export type RecognitionMode = 'command' | 'wake';
 
 export interface SpeechRecognitionHandlers {
@@ -51,6 +53,24 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+/** Prefer the alternative that most clearly contains Elevyn. */
+function pickBestAlternative(result: {
+  length: number;
+  [index: number]: { transcript: string; confidence?: number };
+}): string {
+  let best = result[0]?.transcript ?? '';
+  let bestScore = elevynNameScore(best) * 10 + (result[0]?.confidence ?? 0);
+  for (let a = 1; a < result.length; a += 1) {
+    const alt = result[a]?.transcript ?? '';
+    const score = elevynNameScore(alt) * 10 + (result[a]?.confidence ?? 0);
+    if (score > bestScore) {
+      best = alt;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 export class BrowserSpeechRecognition implements SpeechRecognitionService {
   private recognition: SpeechRecognitionLike | null = null;
   private intentionalStop = false;
@@ -78,9 +98,9 @@ export class BrowserSpeechRecognition implements SpeechRecognitionService {
     const recognition = new Ctor();
     recognition.continuous = true;
     recognition.interimResults = true;
+    // en-US hears "Eleven" reliably; aliases + fuzzy cover Elevyn mangling.
     recognition.lang = 'en-US';
-    // A few alternatives help when Elevyn is misheard.
-    recognition.maxAlternatives = 3;
+    recognition.maxAlternatives = 5;
 
     recognition.onresult = (event) => {
       if (session !== this.sessionId) return;
@@ -88,21 +108,7 @@ export class BrowserSpeechRecognition implements SpeechRecognitionService {
       // "hey" + "elevyn open cursor" still matches as one address.
       let transcript = '';
       for (let i = 0; i < event.results.length; i += 1) {
-        const result = event.results[i];
-        // Prefer the alternative that looks most like our wake name.
-        let best = result[0]?.transcript ?? '';
-        for (let a = 0; a < result.length; a += 1) {
-          const alt = result[a]?.transcript ?? '';
-          if (
-            /\b(elevyn|eleven|evelyn|elevan|elevin|elevation|ellen|11)\b/i.test(
-              alt,
-            )
-          ) {
-            best = alt;
-            break;
-          }
-        }
-        transcript += `${best} `;
+        transcript += `${pickBestAlternative(event.results[i])} `;
       }
       const cleaned = transcript.replace(/\s+/g, ' ').trim();
       if (!cleaned) return;
