@@ -16,6 +16,14 @@ import {
   speakMailBrief,
   speakTeamsBrief,
 } from '../services/ms/graph.js';
+import {
+  tryMicrosoftWriteIntent,
+  utteranceNeedsMsToken,
+} from '../services/ms/actions.js';
+import {
+  formatAgendaWhen,
+  parseSpokenAgenda,
+} from '../../src/utils/agendaParse.js';
 
 function wantsMicrosoftContext(utterance: string): boolean {
   const lower = utterance.toLowerCase();
@@ -24,7 +32,8 @@ function wantsMicrosoftContext(utterance: string): boolean {
       lower,
     ) ||
     /\b(email|inbox|outlook|mail)\b/i.test(lower) ||
-    /\b(teams|microsoft)\b/i.test(lower)
+    /\b(teams|microsoft)\b/i.test(lower) ||
+    utteranceNeedsMsToken(utterance)
   );
 }
 
@@ -81,7 +90,8 @@ export function createAiRouter(
       res.json({
         intent: {
           type: 'chat',
-          reply: 'Opening Microsoft sign-in.',
+          reply:
+            'Opening Microsoft sign-in. If you just added new permissions, finish the consent screen so Elevyn can create meetings and send mail.',
           args: { openUrl: '/api/mslogin' },
         },
         execution: null,
@@ -107,12 +117,62 @@ export function createAiRouter(
       return;
     }
 
-    const msBundle =
+    const needsMs =
       wantsMicrosoftContext(utterance) ||
       /\b(check|any|read)\b.+\b(mail|email|inbox|outlook)\b/i.test(lower) ||
-      /\b(teams|chat)\b/i.test(lower)
-        ? await getValidAccessToken(req, res)
-        : null;
+      /\b(teams|chat)\b/i.test(lower) ||
+      utteranceNeedsMsToken(utterance) ||
+      Boolean(parseSpokenAgenda(utterance));
+
+    const msBundle = needsMs ? await getValidAccessToken(req, res) : null;
+
+    // Write actions: email / Teams message / Outlook calendar (+ confirm/cancel).
+    if (msBundle) {
+      const parsedSchedule = parseSpokenAgenda(utterance);
+      try {
+        const writeIntent = await tryMicrosoftWriteIntent(
+          utterance,
+          msBundle.accessToken,
+          msBundle.account,
+          parsedSchedule
+            ? {
+                title: parsedSchedule.title,
+                startIso: parsedSchedule.startIso,
+                endIso: parsedSchedule.endIso,
+              }
+            : null,
+        );
+        if (writeIntent) {
+          res.json({ intent: writeIntent, execution: null });
+          return;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Microsoft action failed';
+        res.json({
+          intent: {
+            type: 'chat',
+            reply: `Microsoft action failed. ${message}`,
+          },
+          execution: null,
+        });
+        return;
+      }
+    } else if (
+      isMicrosoftConfigured() &&
+      utteranceNeedsMsToken(utterance) &&
+      !/^(yes|yeah|yep|no|cancel)/i.test(lower)
+    ) {
+      res.json({
+        intent: {
+          type: 'chat',
+          reply:
+            'Microsoft 365 is not connected yet. Say “connect Microsoft” so I can send mail, Teams messages, and create calendar events.',
+          args: { openUrl: '/api/mslogin' },
+        },
+        execution: null,
+      });
+      return;
+    }
 
     // Direct mail brief (skip model when we can answer from Graph).
     if (
@@ -204,6 +264,32 @@ export function createAiRouter(
     }
 
     const intent = await brain.interpret(utterance, context);
+
+    // If the brain scheduled locally and MS is connected, also push to Outlook
+    // when the write handler didn't already (e.g. model path).
+    if (
+      msBundle &&
+      intent.args?.scheduleUtterance &&
+      typeof intent.args.scheduleUtterance === 'string'
+    ) {
+      const parsed = parseSpokenAgenda(String(intent.args.scheduleUtterance));
+      if (parsed) {
+        const mirrored = await tryMicrosoftWriteIntent(
+          `schedule ${parsed.title} on outlook at ${formatAgendaWhen(parsed.startIso)}`,
+          msBundle.accessToken,
+          msBundle.account,
+          {
+            title: parsed.title,
+            startIso: parsed.startIso,
+            endIso: parsed.endIso,
+          },
+        );
+        if (mirrored?.reply) {
+          intent.reply = mirrored.reply;
+        }
+      }
+    }
+
     let execution = null;
 
     if (intent.type === 'command' && intent.commandId) {

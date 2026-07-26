@@ -13,10 +13,14 @@ const SCOPES = [
   'profile',
   'offline_access',
   'User.Read',
-  'Calendars.Read',
-  'Mail.Read',
-  'Chat.Read',
-  'OnlineMeetings.Read',
+  'Calendars.ReadWrite',
+  'Mail.ReadWrite',
+  'Mail.Send',
+  'Chat.ReadWrite',
+  'ChatMessage.Send',
+  'OnlineMeetings.ReadWrite',
+  'People.Read',
+  'User.Read.All',
 ].join(' ');
 
 export type MsTokenBundle = {

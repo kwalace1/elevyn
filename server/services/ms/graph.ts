@@ -13,6 +13,7 @@ export type GraphMailItem = {
 };
 
 export type GraphChatItem = {
+  id?: string;
   title: string;
   preview: string;
   at?: string;
@@ -32,6 +33,54 @@ async function graphGet<T>(accessToken: string, path: string): Promise<T> {
     throw new Error(`Graph ${res.status}: ${body.slice(0, 200) || res.statusText}`);
   }
   return res.json() as Promise<T>;
+}
+
+async function graphSend(
+  accessToken: string,
+  method: 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<Response> {
+  const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Graph ${res.status}: ${text.slice(0, 240) || res.statusText}`);
+  }
+  return res;
+}
+
+const ELEVYN_TZ = () => process.env.ELEVYN_TZ ?? 'America/New_York';
+
+/** Wall-clock parts in Elevyn TZ for a UTC ISO instant. */
+function wallPartsInTz(iso: string, timeZone = ELEVYN_TZ()): {
+  dateTime: string;
+  timeZone: string;
+} {
+  const d = new Date(iso);
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const bits = Object.fromEntries(
+    fmt.formatToParts(d).map((p) => [p.type, p.value]),
+  );
+  const hour = Number(bits.hour) % 24;
+  const dateTime = `${bits.year}-${bits.month}-${bits.day}T${String(hour).padStart(2, '0')}:${bits.minute}:${bits.second}`;
+  return { dateTime, timeZone };
 }
 
 /** Convert a wall-clock time in `timeZone` to a real UTC ISO instant. */
@@ -181,6 +230,7 @@ export async function fetchRecentTeamsChats(
   try {
     const data = await graphGet<{
       value?: Array<{
+        id?: string;
         topic?: string;
         chatType?: string;
         lastMessagePreview?: {
@@ -207,6 +257,7 @@ export async function fetchRecentTeamsChats(
           (c.chatType === 'oneOnOne' ? who || 'Chat' : 'Teams chat');
         const preview = who && body ? `${who}: ${body}` : body || who || '';
         return {
+          id: c.id,
           title,
           preview,
           at: c.lastMessagePreview?.createdDateTime,
@@ -214,9 +265,226 @@ export async function fetchRecentTeamsChats(
       })
       .filter((c) => c.preview || c.title);
   } catch {
-    // Chat.Read often needs admin consent — fail soft.
+    // Chat.Read / Chat.ReadWrite often needs admin consent — fail soft.
     return [];
   }
+}
+
+export type GraphPerson = {
+  name: string;
+  email: string;
+};
+
+/** Resolve a person by spoken name (People API → directory → recent mail). */
+export async function findPerson(
+  accessToken: string,
+  who: string,
+): Promise<GraphPerson | null> {
+  const needle = who.trim();
+  if (!needle) return null;
+
+  // 1) People suggestions
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/me/people?$search=${encodeURIComponent(`"${needle}"`)}&$top=5`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+          ConsistencyLevel: 'eventual',
+        },
+      },
+    );
+    if (res.ok) {
+      const data = (await res.json()) as {
+        value?: Array<{
+          displayName?: string;
+          scoredEmailAddresses?: Array<{ address?: string }>;
+        }>;
+      };
+      for (const p of data.value ?? []) {
+        const email = p.scoredEmailAddresses?.[0]?.address?.trim();
+        const name = p.displayName?.trim() || needle;
+        if (email) return { name, email };
+      }
+    }
+  } catch {
+    // People.Read may be missing — continue.
+  }
+
+  // 2) Directory users
+  try {
+    const safe = needle.replace(/'/g, "''");
+    const data = await graphGet<{
+      value?: Array<{ displayName?: string; mail?: string; userPrincipalName?: string }>;
+    }>(
+      accessToken,
+      `/users?$filter=${encodeURIComponent(
+        `startswith(displayName,'${safe}') or startswith(givenName,'${safe}') or startswith(surname,'${safe}')`,
+      )}&$select=displayName,mail,userPrincipalName&$top=5`,
+    );
+    for (const u of data.value ?? []) {
+      const email = (u.mail || u.userPrincipalName || '').trim();
+      const name = u.displayName?.trim() || needle;
+      if (email.includes('@')) return { name, email };
+    }
+  } catch {
+    // User.Read.All may be missing — continue.
+  }
+
+  // 3) Recent mail from/to
+  try {
+    const mail = await fetchRecentMail(accessToken, 20);
+    const lower = needle.toLowerCase();
+    const hit = mail.find((m) => m.from.toLowerCase().includes(lower));
+    if (hit) {
+      // from is display name — try to pull address from Graph message list again
+      const data = await graphGet<{
+        value?: Array<{
+          from?: { emailAddress?: { name?: string; address?: string } };
+        }>;
+      }>(
+        accessToken,
+        `/me/messages?$top=25&$select=from&$orderby=receivedDateTime desc`,
+      );
+      for (const m of data.value ?? []) {
+        const name = m.from?.emailAddress?.name?.trim() ?? '';
+        const address = m.from?.emailAddress?.address?.trim() ?? '';
+        if (
+          address &&
+          (name.toLowerCase().includes(lower) ||
+            address.toLowerCase().includes(lower))
+        ) {
+          return { name: name || needle, email: address };
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Bare email spoken/typed
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(needle)) {
+    return { name: needle, email: needle };
+  }
+
+  return null;
+}
+
+export type GraphChatRef = {
+  id: string;
+  title: string;
+};
+
+/** Find a Teams chat by topic / member name. */
+export async function findTeamsChat(
+  accessToken: string,
+  who: string,
+): Promise<GraphChatRef | null> {
+  const needle = who.trim().toLowerCase();
+  if (!needle) return null;
+
+  const data = await graphGet<{
+    value?: Array<{
+      id?: string;
+      topic?: string;
+      chatType?: string;
+      members?: Array<{ displayName?: string }>;
+    }>;
+  }>(
+    accessToken,
+    `/me/chats?$expand=members&$top=40`,
+  );
+
+  for (const c of data.value ?? []) {
+    if (!c.id) continue;
+    const topic = (c.topic ?? '').toLowerCase();
+    if (topic && topic.includes(needle)) {
+      return { id: c.id, title: c.topic!.trim() };
+    }
+    const member = (c.members ?? []).find((m) =>
+      (m.displayName ?? '').toLowerCase().includes(needle),
+    );
+    if (member?.displayName) {
+      return { id: c.id, title: member.displayName.trim() };
+    }
+  }
+
+  // Fallback: recent chat titles from brief helper
+  const recent = await fetchRecentTeamsChats(accessToken, 20);
+  const hit = recent.find(
+    (c) => c.id && c.title.toLowerCase().includes(needle),
+  );
+  if (hit?.id) return { id: hit.id, title: hit.title };
+  return null;
+}
+
+export async function createCalendarEvent(
+  accessToken: string,
+  opts: {
+    subject: string;
+    startIso: string;
+    endIso: string;
+    body?: string;
+    attendeeEmails?: string[];
+    teamsMeeting?: boolean;
+  },
+): Promise<{ id: string; subject: string; webLink?: string }> {
+  const start = wallPartsInTz(opts.startIso);
+  const end = wallPartsInTz(opts.endIso);
+  const payload: Record<string, unknown> = {
+    subject: opts.subject,
+    body: {
+      contentType: 'Text',
+      content: opts.body?.trim() || opts.subject,
+    },
+    start,
+    end,
+    attendees: (opts.attendeeEmails ?? []).map((address) => ({
+      emailAddress: { address },
+      type: 'required',
+    })),
+  };
+  if (opts.teamsMeeting) {
+    payload.isOnlineMeeting = true;
+    payload.onlineMeetingProvider = 'teamsForBusiness';
+  }
+
+  const res = await graphSend(accessToken, 'POST', '/me/events', payload);
+  const created = (await res.json()) as {
+    id?: string;
+    subject?: string;
+    webLink?: string;
+  };
+  return {
+    id: created.id ?? 'event',
+    subject: created.subject ?? opts.subject,
+    webLink: created.webLink,
+  };
+}
+
+export async function sendMail(
+  accessToken: string,
+  opts: { to: string; subject: string; body: string },
+): Promise<void> {
+  await graphSend(accessToken, 'POST', '/me/sendMail', {
+    message: {
+      subject: opts.subject,
+      body: { contentType: 'Text', content: opts.body },
+      toRecipients: [{ emailAddress: { address: opts.to } }],
+    },
+    saveToSentItems: true,
+  });
+}
+
+export async function sendTeamsMessage(
+  accessToken: string,
+  chatId: string,
+  text: string,
+): Promise<void> {
+  await graphSend(accessToken, 'POST', `/chats/${encodeURIComponent(chatId)}/messages`, {
+    body: { contentType: 'text', content: text },
+  });
 }
 
 /** Spoken / context block for catch-me-up and mail/Teams intents. */
@@ -265,7 +533,9 @@ export async function buildMicrosoftBrief(accessToken: string): Promise<string> 
       lines.push(`- ${c.title}: ${c.preview}`);
     }
   } else {
-    lines.push('Teams chats: unavailable or empty (Chat.Read may need admin consent).');
+    lines.push(
+      'Teams chats: unavailable or empty (Chat.ReadWrite may need admin consent).',
+    );
   }
 
   return lines.join('\n');
@@ -291,7 +561,7 @@ export function speakMailBrief(mail: GraphMailItem[]): string {
 
 export function speakTeamsBrief(chats: GraphChatItem[]): string {
   if (!chats.length) {
-    return 'No recent Teams chats available. Your tenant may still need Chat.Read consent.';
+    return 'No recent Teams chats available. Your tenant may still need Chat.ReadWrite consent.';
   }
   const top = chats.slice(0, 3);
   const bits = top.map((c) => `${c.title}: ${c.preview.slice(0, 80)}`);
