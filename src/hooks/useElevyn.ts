@@ -4,7 +4,12 @@ import { elevynApi } from '../services/api/client';
 import { BrowserSpeechRecognition } from '../services/voice/recognition';
 import { ElevynSpeech } from '../services/voice/elevynSpeech';
 import { SessionMemory } from '../services/session/memory';
-import { matchAddress, matchCaptureShortcut } from '../utils/wakeWord';
+import {
+  isEchoOfReply,
+  matchAddress,
+  matchCaptureShortcut,
+  matchStopCommand,
+} from '../utils/wakeWord';
 
 type ListenPhase = 'wake' | 'command';
 
@@ -53,6 +58,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   // While capture is armed, "note that…" also fires without the name.
   const workModeRef = useRef(false);
   const captureArmedRef = useRef(false);
+  // Reply currently being spoken — used to tell Kevin's interruption apart
+  // from the mic hearing Elevyn's own voice.
+  const speakingReplyRef = useRef('');
 
   const startWakeListeningRef = useRef<() => void>(() => {});
   const startCommandListeningRef = useRef<() => void>(() => {});
@@ -132,13 +140,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       setResponse(trimmed);
       setState('speaking');
       stateRef.current = 'speaking';
+      speakingReplyRef.current = trimmed;
       ttsRef.current.speak(trimmed, {
         onStart: () => {
-          // Barge-in only for longer replies. Short confirms ("Noted.") pick up
-          // Elevyn's own voice on the mic and kill the next wake session.
+          // Barge-in: keep the mic open under speech so "stop" / "Elevyn…"
+          // cuts Elevyn off instantly. Skip one-word confirms ("Noted.") —
+          // too short to interrupt, and echo-prone.
           if (
-            trimmed.length >= 48 &&
-            workModeRef.current &&
+            trimmed.length >= 24 &&
             phaseRef.current === 'wake' &&
             armedRef.current &&
             brainOnlineRef.current
@@ -147,10 +156,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
               if (stateRef.current === 'speaking' && phaseRef.current === 'wake') {
                 startWakeListeningRef.current();
               }
-            }, 1200);
+            }, 500);
           }
         },
         onEnd: () => {
+          speakingReplyRef.current = '';
           setState('idle');
           stateRef.current = 'idle';
           onDone?.();
@@ -428,14 +438,31 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       if (stateRef.current === 'thinking' || processingRef.current) return;
       syncSurfaceFlags();
 
-      // Barge-in: address Elevyn while it's speaking → cut TTS and take the command.
+      // Barge-in: interrupt Elevyn while it's speaking.
       if (stateRef.current === 'speaking') {
-        const { heard, remainder } = matchAddress(text, {
-          workMode: workModeRef.current,
-        });
+        // The mic sometimes hears Elevyn's own voice — never self-interrupt.
+        if (isEchoOfReply(text, speakingReplyRef.current)) return;
+
+        // "Stop" / "wait" / "Elevyn, enough" → go quiet immediately, no ack.
+        if (matchStopCommand(text)) {
+          clearWakeCommit();
+          ttsRef.current.stop();
+          speakingReplyRef.current = '';
+          pendingAwaitRef.current = null;
+          setState('idle');
+          stateRef.current = 'idle';
+          setResponse('');
+          recognitionRef.current.abort();
+          resumeWakeSoon();
+          return;
+        }
+
+        // Name (anywhere, any mode) → cut speech and take the new command.
+        const { heard, remainder } = matchAddress(text, { workMode: true });
         if (!heard || (!isFinal && !remainder)) return;
         clearWakeCommit();
         ttsRef.current.stop();
+        speakingReplyRef.current = '';
         setState('idle');
         stateRef.current = 'idle';
         recognitionRef.current.abort();
@@ -492,6 +519,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearWakeCommit,
       enterCommandMode,
       processUtterance,
+      resumeWakeSoon,
       syncSurfaceFlags,
     ],
   );

@@ -78,6 +78,42 @@ export function matchAddress(
 }
 
 /**
+ * Interrupt words that halt Elevyn mid-speech, with or without the name.
+ * "Elevyn stop" / "stop" / "hold on" all cut speech instantly.
+ */
+const STOP_COMMAND = new RegExp(
+  String.raw`^(?:(?:hey\s+)?${NAME}[\s,]+)?(?:stop|wait|hold on|hang on|shut up|quiet|silence|enough|pause|never ?mind|cancel|that'?s enough)$`,
+  'i',
+);
+
+export function matchStopCommand(transcript: string): boolean {
+  const normalized = normalizeTranscript(transcript);
+  if (!normalized) return false;
+  if (STOP_COMMAND.test(normalized)) return true;
+  // Chrome accumulates the session transcript — also check the trailing words
+  // so "…background noise… elevyn stop" still registers.
+  const words = normalized.split(' ');
+  for (let take = 1; take <= Math.min(3, words.length); take++) {
+    if (STOP_COMMAND.test(words.slice(-take).join(' '))) return true;
+  }
+  return false;
+}
+
+/**
+ * Echo guard: Chrome's mic sometimes hears Elevyn's own TTS. If nearly every
+ * word the mic heard is already in the reply being spoken, it's an echo —
+ * not Kevin interrupting.
+ */
+export function isEchoOfReply(heard: string, reply: string): boolean {
+  const words = (s: string) => normalizeTranscript(s).split(' ').filter(Boolean);
+  const heardWords = words(heard);
+  if (!heardWords.length) return true;
+  const replySet = new Set(words(reply));
+  const hits = heardWords.filter((w) => replySet.has(w)).length;
+  return hits / heardWords.length >= 0.7;
+}
+
+/**
  * Capture lines Kevin can fire without saying "Elevyn" while recording is armed.
  */
 const CAPTURE_LINE =
