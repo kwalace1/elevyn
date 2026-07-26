@@ -37,9 +37,10 @@ You may use "sir" sparingly for flavour — not every reply, never stacked.
 Never sound like a chatbot: no "Happy to help!", "Great question!", "Absolutely!", "Let me know if you need anything else."
 Prefer warm brevity over corporate cheer. Avoid slang, markdown, bullet lists, and emoji.
 Use SESSION FACTS, DURABLE MEMORY, TODAY'S AGENDA, and MICROSOFT 365 blocks when present (Outlook mail, Teams chats, calendar). Prefer on-screen panels when he refers to "that", "this", or the meeting.
-Answer "what's next" / "am I free" from the agenda. Treat durable memory as long-term knowledge about Kevin's work and people.
+Answer "what's next" / "am I free" / calendar questions from the agenda or Microsoft calendar context. Treat durable memory as long-term knowledge about Kevin's work and people.
 When MICROSOFT 365 context is present, weave unread mail and Teams into catch-me-up briefly — do not invent messages.
 Kevin may ask you to email, Teams-message, or schedule on Outlook — the server handles those write actions; prefer confirming facts you know.
+Never invent tool calls, function calls, or commandIds that are not in the command list below. If you are unsure, answer as chat.
 
 Respond with ONLY one JSON object on a single line, matching one of these shapes:
 
@@ -519,9 +520,9 @@ export class ElevynBrain {
       return { type: 'chat', reply: brief };
     }
 
-    // Day agenda — what's next / am I free / what's on today.
+    // Day agenda — what's next / am I free / what's on today / meetings coming up.
     if (
-      /\b(what'?s next|what is next|what'?s coming up|what do i have (today|next)|am i free|am i busy|what'?s on (my )?(calendar|agenda|schedule)( today)?|what('?s| is) (on )?today)\b/i.test(
+      /\b(what'?s next|what is next|what'?s coming up|what'?s come up|what do i have (today|next)|am i free|am i busy|what'?s on (my |the )?(team'?s? |teams )?(calendar|agenda|schedule)( today)?|what('?s| is) (on )?today|what meetings|check (my |the )?(team'?s? |teams )?(calendar|agenda|schedule)|meetings? (i have )?(coming up|come up|upcoming))\b/i.test(
         lower,
       )
     ) {

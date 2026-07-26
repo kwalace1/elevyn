@@ -10,9 +10,11 @@ import {
 } from '../services/ms/oauth.js';
 import {
   buildMicrosoftBrief,
+  fetchGraphCalendar,
   fetchRecentMail,
   fetchRecentTeamsChats,
   mailFromSender,
+  speakCalendarBrief,
   speakMailBrief,
   speakTeamsBrief,
 } from '../services/ms/graph.js';
@@ -33,7 +35,22 @@ function wantsMicrosoftContext(utterance: string): boolean {
     ) ||
     /\b(email|inbox|outlook|mail)\b/i.test(lower) ||
     /\b(teams|microsoft)\b/i.test(lower) ||
+    /\b(calendar|meetings?|agenda|schedule)\b/i.test(lower) ||
     utteranceNeedsMsToken(utterance)
+  );
+}
+
+function wantsCalendarBrief(utterance: string): boolean {
+  const lower = utterance.toLowerCase();
+  return (
+    /\b(what'?s|what is|what do i have|what meetings|check|show|see|look(?:\s+at)?)\b.+\b(calendar|agenda|schedule|meetings?)\b/i.test(
+      lower,
+    ) ||
+    /\b(calendar|agenda|schedule)\b.+\b(coming up|come up|upcoming|next|today|tomorrow)\b/i.test(
+      lower,
+    ) ||
+    /\b(meetings?|what'?s)\b.+\b(coming up|come up|upcoming)\b/i.test(lower) ||
+    /\b(what'?s next|am i free|am i busy)\b/i.test(lower)
   );
 }
 
@@ -119,12 +136,36 @@ export function createAiRouter(
 
     const needsMs =
       wantsMicrosoftContext(utterance) ||
+      wantsCalendarBrief(utterance) ||
       /\b(check|any|read)\b.+\b(mail|email|inbox|outlook)\b/i.test(lower) ||
       /\b(teams|chat)\b/i.test(lower) ||
       utteranceNeedsMsToken(utterance) ||
       Boolean(parseSpokenAgenda(utterance));
 
     const msBundle = needsMs ? await getValidAccessToken(req, res) : null;
+
+    // Live Outlook calendar — never let the model invent fake calendar tools.
+    if (msBundle && wantsCalendarBrief(utterance)) {
+      try {
+        const events = await fetchGraphCalendar(msBundle.accessToken);
+        res.json({
+          intent: { type: 'chat', reply: speakCalendarBrief(events) },
+          execution: null,
+        });
+        return;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Calendar unavailable';
+        res.json({
+          intent: {
+            type: 'chat',
+            reply: `I could not reach your Outlook calendar just now. ${message}`,
+          },
+          execution: null,
+        });
+        return;
+      }
+    }
 
     // Write actions: email / Teams message / Outlook calendar (+ confirm/cancel).
     if (msBundle) {

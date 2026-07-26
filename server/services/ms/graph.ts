@@ -559,6 +559,24 @@ export function speakMailBrief(mail: GraphMailItem[]): string {
   return `${unread.length} unread. ${names}.`;
 }
 
+export function speakCalendarBrief(events: CalendarEventPayload[]): string {
+  if (!events.length) {
+    return 'Nothing on your Outlook calendar in the next couple of days.';
+  }
+  const tz = process.env.ELEVYN_TZ ?? 'America/New_York';
+  const lines = events.slice(0, 5).map((e) => {
+    const when = new Date(e.start).toLocaleString('en-US', {
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: tz,
+    });
+    return `${when}: ${e.title}`;
+  });
+  if (lines.length === 1) return `Next up: ${lines[0]}.`;
+  return `You have ${events.length} upcoming. ${lines.join('. ')}.`;
+}
+
 export function speakTeamsBrief(chats: GraphChatItem[]): string {
   if (!chats.length) {
     return 'No recent Teams chats available. Your tenant may still need Chat.ReadWrite consent.';
