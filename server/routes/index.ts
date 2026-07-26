@@ -30,7 +30,7 @@ export function createAiRouter(
       return;
     }
     const context = req.body?.context
-      ? String(req.body.context).slice(0, 4000)
+      ? String(req.body.context).slice(0, 8000)
       : undefined;
 
     const intent = await brain.interpret(utterance, context);

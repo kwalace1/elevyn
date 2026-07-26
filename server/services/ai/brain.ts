@@ -11,11 +11,12 @@ import type { AIProviderRegistry } from './registry.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { MemoryService } from '../memory/store.js';
 
-const SYSTEM_PROMPT = `You are Elevyn, Kevin's AI aide and workspace operating system — calm, capable, a little like Jarvis without the stiff formality.
-Speak in short natural British English suitable for text-to-speech (1-2 sentences max).
-Be warm and confident. Default to plain confirmations: "Got it.", "On it.", "Done.", "Noted.", "Sure."
-You may use "sir" sparingly for flavour — not in every reply, and never stack it ("Got it. Noted, sir.").
+const SYSTEM_PROMPT = `You are Elevyn, Kevin's personal AI aide — soft-spoken, precise, faintly like Jarvis: capable, calm, never stiff or chatty.
+Speak short British English suitable for text-to-speech (1-2 sentences max).
+Confirmations: "Certainly.", "Of course.", "Right away.", "Noted.", "Understood.", "Done."
+You may use "sir" sparingly for flavour — not every reply, never stacked.
 Avoid slang, markdown, bullet lists, and emoji.
+Use SESSION FACTS and RECENT CONVERSATION when present. Prefer on-screen panels when he refers to "that", "this", or the meeting.
 
 Respond with ONLY one JSON object on a single line, matching one of these shapes:
 
@@ -25,24 +26,21 @@ Control the computer:
 Change the on-screen surface or create content on screen:
 {"type":"surface","surface":{"op":"<op>","title":"<optional>","text":"<optional>","items":["..."]},"reply":"<spoken confirmation>"}
 Valid surface ops:
-- "work": clear the screen to a minimal work canvas (say when Kevin says "let's work", "focus mode", "let's get to work")
-- "dashboard": go back to the home dashboard ("go home", "show dashboard", "home screen")
-- "clear": remove all on-screen panels ("clear the screen", "clean up", "reset")
-- "createNote": make a note. Put the note content in "text", optional "title".
-- "createTask": add a task/reminder. Put it in "text".
-- "createList": make a list. Put entries in "items", optional "title".
-- "addItem": add one entry to the current list/tasks. Put it in "text".
-- "removeLast": undo/remove the most recent panel.
-- "startCapture": begin capturing meeting notes.
-- "stopCapture": stop capturing meeting notes.
-- "appendCapture": add a line to the meeting capture. Put it in "text".
-- "timer": start a countdown. Put the length in "seconds", optional "title".
-- "cancelTimer": cancel the running timer.
+- "work": minimal work canvas ("let's work", "focus mode", "work mode")
+- "dashboard": home dashboard ("go home", "show dashboard")
+- "clear": remove panels ("clear the screen", "clean up")
+- "createNote": note in "text", optional "title". Use for pinning useful answers.
+- "createTask": task/reminder in "text"
+- "createList": list in "items", optional "title"
+- "addItem": add one entry to current list/tasks in "text"
+- "removeLast": undo last panel
+- "startCapture" / "stopCapture" / "appendCapture": meeting capture
+- "timer" / "cancelTimer": countdown; "timer" needs "seconds"
 
 Just chatting or answering a question:
 {"type":"chat","reply":"<spoken answer>"}
 
-Prefer commands/surface actions when Kevin clearly wants an action. Keep replies brief.`;
+Prefer surface actions when he clearly wants something on screen. Keep replies brief and useful.`
 
 export class ElevynBrain {
   constructor(
@@ -57,7 +55,7 @@ export class ElevynBrain {
   ): Promise<InterpretedIntent> {
     const trimmed = utterance.trim();
     if (!trimmed) {
-      return { type: 'chat', reply: 'Sorry — I did not catch that.' };
+      return { type: 'chat', reply: 'Pardon me — I did not catch that.' };
     }
 
     const local = this.matchLocalIntent(trimmed);
@@ -73,7 +71,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am online, but no AI provider is available yet. Add an OpenRouter key, start Ollama, or try a command like open Cursor.',
+          'I am online, but no AI provider is available yet. Add an OpenRouter key or start Ollama, and I will be fully at your service.',
       };
     }
 
@@ -86,22 +84,27 @@ export class ElevynBrain {
       .join('\n');
 
     try {
+      const contextBlock = (context ?? '').trim();
+      const userContent = contextBlock
+        ? `${contextBlock}\n\n=== REQUEST ===\n${trimmed}`
+        : trimmed;
+
       const completion = await this.ai.complete({
         messages: [
           { role: 'system', content: `${SYSTEM_PROMPT}\n\nCommands:\n${catalog}` },
-          { role: 'user', content: trimmed },
+          { role: 'user', content: userContent },
         ],
         temperature: 0.2,
         // Enough headroom that a JSON chat reply is never cut mid-string —
         // truncated JSON used to leak raw {"type":"chat"... to the user.
-        maxTokens: 260,
+        maxTokens: 320,
       });
 
       return this.parseModelIntent(completion.content, trimmed);
     } catch {
       return {
         type: 'chat',
-        reply: 'Something went wrong reaching the model. Your system commands still work.',
+        reply: 'Something went wrong reaching the model. I am still here for notes and commands.',
       };
     }
   }
@@ -179,7 +182,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'Quite a bit. I take notes, track tasks and lists, run timers, and capture meetings as you speak. I open and close apps, remember things you tell me, summarize what is on screen, and copy it to your clipboard. Say "work mode" and I will set the stage.',
+          'I am your sidekick. Ask me anything, remember facts for this session, take notes and tasks, run timers, and capture meetings. Say "catch me up" anytime, or "wrap up the meeting" when you are done. Work mode clears the stage when you need focus.',
       };
     }
 
@@ -187,7 +190,7 @@ export class ElevynBrain {
       const hour = new Date().getHours();
       const greeting =
         hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-      return { type: 'chat', reply: `${greeting}. How can I help?` };
+      return { type: 'chat', reply: `${greeting}. How may I help?` };
     }
 
     if (/\b(lock (the )?(mac|computer|screen)|lock screen)\b/i.test(lower)) {
@@ -422,8 +425,87 @@ export class ElevynBrain {
     context?: string,
   ): Promise<InterpretedIntent | null> {
     const lower = original.toLowerCase();
+    const ctx = (context ?? '').trim();
 
-    // Remember something durably.
+    // Clear this browser session's short-term memory.
+    if (
+      /\b(clear (the )?session|forget (this|the) session|start (a )?fresh( session)?|wipe (this )?session)\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'chat',
+        reply: 'Session cleared. Fresh slate.',
+        args: { clearSession: true },
+      };
+    }
+
+    // Catch-me-up from session + on-screen context.
+    if (
+      /\b(where were we|catch me up|brief me|status (update|report)|what (have|did) we (been )?(doing|discussing|talking about)|what'?s (going )?on( with (this|the) session)?|recap (the )?session)\b/i.test(
+        lower,
+      )
+    ) {
+      if (!ctx) {
+        return {
+          type: 'chat',
+          reply: 'Nothing on the board yet this session. Say the word when you are ready.',
+        };
+      }
+      const brief = await this.briefSession(ctx);
+      return { type: 'chat', reply: brief };
+    }
+
+    // Wrap up a meeting: summary note + action-item tasks + stop capture.
+    if (
+      /\b(wrap up (the )?meeting|end (the )?meeting|finish (the )?meeting|action items|extract (the )?tasks|summarize (the )?meeting|meeting (summary|recap)|pull (out )?action items)\b/i.test(
+        lower,
+      )
+    ) {
+      const source = extractOnScreen(ctx) || ctx;
+      if (!source) {
+        return {
+          type: 'chat',
+          reply: 'There is no meeting capture to wrap up yet.',
+        };
+      }
+      const { summary, actions } = await this.wrapMeeting(source);
+      const actionLine =
+        actions.length > 0
+          ? ` I pulled ${actions.length} action item${actions.length === 1 ? '' : 's'}.`
+          : '';
+      return {
+        type: 'surface',
+        surface: { op: 'createNote', title: 'Meeting summary', text: summary },
+        reply: `Meeting wrapped.${actionLine} ${summary}`.trim(),
+        args: {
+          stopCapture: true,
+          actionItems: actions,
+        },
+      };
+    }
+
+    // Pin the last Elevyn reply (or a spoken snippet) onto the glass.
+    if (
+      /^(?:pin (?:that|it|this)|keep (?:that|it|this) on (?:screen|the board)|put (?:that|it) on (?:screen|the board))\b/i.test(
+        lower,
+      )
+    ) {
+      const last = extractLastElevynLine(ctx);
+      if (!last) {
+        return {
+          type: 'chat',
+          reply: 'Nothing recent to pin. Ask me something first.',
+        };
+      }
+      return {
+        type: 'surface',
+        surface: { op: 'createNote', title: 'Pinned', text: last },
+        reply: 'Pinned.',
+      };
+    }
+
+    // Remember something for this session (+ durable store when available).
     const rememberMatch = original.match(
       /^(?:please\s+)?(?:remember|note to self|keep in mind|don'?t forget)(?:\s+that|\s+this)?\s*[:,-]?\s*(.+)$/i,
     );
@@ -438,37 +520,49 @@ export class ElevynBrain {
             category: 'notes',
             title: content.split(/\s+/).slice(0, 6).join(' '),
             content,
-            tags: ['voice'],
+            tags: ['voice', 'session'],
           });
         } catch {
-          // If persistence fails we still acknowledge — memory is best-effort.
+          // Best-effort durable write.
         }
       }
-      return { type: 'chat', reply: "I'll remember that." };
+      return {
+        type: 'chat',
+        reply: "Certainly. I'll remember that.",
+        args: { sessionFact: content },
+      };
     }
 
-    // Recall from memory.
+    // Recall from durable memory, then fall back to session facts in context.
     const recallMatch = original.match(
       /^(?:what do you know about|what do you remember about|what did i say about|do you remember|recall|remind me (?:about|of)|tell me about)\s+(.+)$/i,
     );
-    if (recallMatch && this.memory) {
+    if (recallMatch) {
       const query = recallMatch[1].replace(/[.!?]+$/, '').trim();
-      try {
-        const hits = await this.memory.search(query);
-        if (hits.length) {
-          const top = hits[0];
-          return {
-            type: 'chat',
-            reply: `Here is what I have: ${top.content}`,
-          };
+      if (this.memory) {
+        try {
+          const hits = await this.memory.search(query);
+          if (hits.length) {
+            return {
+              type: 'chat',
+              reply: `Here is what I have: ${hits[0].content}`,
+            };
+          }
+        } catch {
+          // fall through to session facts
         }
+      }
+      const fromSession = findSessionFact(ctx, query);
+      if (fromSession) {
         return {
           type: 'chat',
-          reply: `I have nothing on ${query}.`,
+          reply: `From this session: ${fromSession}`,
         };
-      } catch {
-        return { type: 'chat', reply: 'I could not reach my memory.' };
       }
+      return {
+        type: 'chat',
+        reply: `I have nothing on ${query} yet.`,
+      };
     }
 
     // Summarize the on-screen notes / capture.
@@ -477,7 +571,7 @@ export class ElevynBrain {
         lower,
       )
     ) {
-      const source = (context ?? '').trim();
+      const source = extractOnScreen(ctx) || ctx;
       if (!source) {
         return {
           type: 'chat',
@@ -498,7 +592,7 @@ export class ElevynBrain {
         lower,
       )
     ) {
-      const source = (context ?? '').trim();
+      const source = extractOnScreen(ctx) || ctx;
       if (!source) {
         return { type: 'chat', reply: 'Nothing on screen yet.' };
       }
@@ -512,19 +606,86 @@ export class ElevynBrain {
         lower,
       )
     ) {
-      const source = (context ?? '').trim();
+      const source = extractOnScreen(ctx) || ctx;
       if (!source) {
         return { type: 'chat', reply: 'Nothing to copy yet.' };
       }
       return {
         type: 'chat',
         reply: 'Copied to your clipboard.',
-        // Stash payload in args so the client can write it.
         args: { clipboard: source },
       };
     }
 
     return null;
+  }
+
+  private async briefSession(context: string): Promise<string> {
+    const provider = await this.ai.resolve();
+    if (provider) {
+      try {
+        const completion = await this.ai.complete({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are Elevyn. Give Kevin a crisp 2-sentence spoken brief of where things stand from the session context. British English, no markdown, no lists. Start naturally — no "Certainly" filler.',
+            },
+            { role: 'user', content: context },
+          ],
+          temperature: 0.3,
+          maxTokens: 180,
+        });
+        const text = completion.content.trim().replace(/\s+/g, ' ');
+        if (text) return text.slice(0, 400);
+      } catch {
+        // fall through
+      }
+    }
+    return extractiveBrief(context);
+  }
+
+  private async wrapMeeting(
+    source: string,
+  ): Promise<{ summary: string; actions: string[] }> {
+    const provider = await this.ai.resolve();
+    if (provider) {
+      try {
+        const completion = await this.ai.complete({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are Elevyn. From these meeting notes return ONLY JSON: {"summary":"<2 sentences>","actions":["task1","task2"]}. Max 5 actions. Plain text inside strings. No markdown.',
+            },
+            { role: 'user', content: source },
+          ],
+          temperature: 0.2,
+          maxTokens: 320,
+        });
+        const match = completion.content.match(/\{[\s\S]*\}/);
+        if (match) {
+          const parsed = JSON.parse(match[0]) as {
+            summary?: string;
+            actions?: unknown;
+          };
+          const summary = String(parsed.summary ?? '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const actions = Array.isArray(parsed.actions)
+            ? parsed.actions
+                .map((a) => String(a).replace(/\s+/g, ' ').trim())
+                .filter(Boolean)
+                .slice(0, 5)
+            : [];
+          if (summary) return { summary, actions };
+        }
+      } catch {
+        // fall through
+      }
+    }
+    const summary = await this.summarize(source);
+    return { summary, actions: [] };
   }
 
   private async summarize(source: string): Promise<string> {
@@ -608,7 +769,7 @@ export class ElevynBrain {
           return {
             type: 'surface',
             surface: parsed.surface,
-            reply: parsed.reply || 'Got it.',
+            reply: parsed.reply || 'Certainly.',
           };
         }
         if (parsed.type === 'chat' && parsed.reply) {
@@ -649,6 +810,81 @@ export class ElevynBrain {
       reply: cleaned.slice(0, 280) || 'Understood.',
     };
   }
+}
+
+function extractOnScreen(context: string): string {
+  const marker = '=== ON SCREEN ===';
+  const idx = context.indexOf(marker);
+  if (idx === -1) {
+    // Legacy plain context (panels only).
+    if (
+      context.includes('=== SESSION FACTS ===') ||
+      context.includes('=== RECENT CONVERSATION ===')
+    ) {
+      return '';
+    }
+    return context.trim();
+  }
+  return context.slice(idx + marker.length).trim();
+}
+
+function extractLastElevynLine(context: string): string | null {
+  const block = context.match(
+    /=== RECENT CONVERSATION ===\n([\s\S]*?)(?=\n=== |\n*$)/,
+  );
+  if (!block?.[1]) return null;
+  const lines = block[1]
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(/^Elevyn:\s*(.+)$/i);
+    if (m?.[1]) return m[1].trim();
+  }
+  return null;
+}
+
+function findSessionFact(context: string, query: string): string | null {
+  const block = context.match(/=== SESSION FACTS ===\n([\s\S]*?)(?=\n=== |\n*$)/);
+  if (!block?.[1]) return null;
+  const needle = query.toLowerCase();
+  const facts = block[1]
+    .split('\n')
+    .map((l) => l.replace(/^-+\s*/, '').trim())
+    .filter(Boolean);
+  const hit = facts.find((f) => f.toLowerCase().includes(needle));
+  return hit ?? null;
+}
+
+function extractiveBrief(context: string): string {
+  const facts = findAllSessionFacts(context);
+  const screen = extractOnScreen(context);
+  const bits: string[] = [];
+  if (facts.length) {
+    bits.push(`You asked me to remember: ${facts.slice(0, 2).join('; ')}.`);
+  }
+  if (screen) {
+    const snippet = screen.replace(/\s+/g, ' ').slice(0, 180);
+    bits.push(`On screen: ${snippet}${screen.length > 180 ? '…' : ''}`);
+  }
+  if (!bits.length) {
+    const convo = context.match(/=== RECENT CONVERSATION ===\n([\s\S]+)/);
+    if (convo?.[1]) {
+      const last = convo[1].trim().split('\n').slice(-2).join(' ');
+      return `We left off here: ${last.slice(0, 280)}`;
+    }
+    return 'Quiet session so far. I am standing by.';
+  }
+  return bits.join(' ').slice(0, 400);
+}
+
+function findAllSessionFacts(context: string): string[] {
+  const block = context.match(/=== SESSION FACTS ===\n([\s\S]*?)(?=\n=== |\n*$)/);
+  if (!block?.[1]) return [];
+  return block[1]
+    .split('\n')
+    .map((l) => l.replace(/^-+\s*/, '').trim())
+    .filter(Boolean);
 }
 
 /** Parse a spoken duration ("5 minutes", "1 minute 30 seconds", "an hour"). */

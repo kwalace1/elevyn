@@ -24,8 +24,9 @@ const PYTHON = process.env.ELEVYN_PYTHON ?? 'python3';
 const PREWARM_PHRASES = [
   'Yes?',
   'Go ahead.',
-  'I am listening.',
-  'Got it.',
+  'At your service.',
+  'Certainly.',
+  'Of course.',
   'Noted.',
   "I'll track that.",
   'List created.',
@@ -37,12 +38,12 @@ const PREWARM_PHRASES = [
   'Added.',
   'Removed.',
   'Time.',
-  "I'll remember that.",
+  "Certainly. I'll remember that.",
   'Understood.',
-  'Sure.',
-  'On it.',
-  'Of course.',
-  'Sorry — I did not catch that.',
+  'Right away.',
+  'Pinned.',
+  'Session cleared. Fresh slate.',
+  'Pardon me — I did not catch that.',
 ];
 
 type AudioPayload = {

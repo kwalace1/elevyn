@@ -26,7 +26,7 @@ export function Shell() {
 
   const focusGreeting = useMemo(() => {
     if (elevyn.state === 'thinking') return 'One moment…';
-    return `${greeting}. How can I help?`;
+    return `${greeting}. How may I help?`;
   }, [elevyn.state, greeting]);
 
   useEffect(() => {

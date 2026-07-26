@@ -225,17 +225,20 @@ export function useSurface() {
     setPanels((prev) => prev.filter((p) => p.kind !== 'timer'));
   }, []);
 
-  /** Text of on-screen notes + capture, for summarize / recall context. */
+  /** Text of on-screen panels for summarize / catch-up / model context. */
   const getContext = useCallback(() => {
     const parts = panels
-      .filter((p) => p.kind === 'capture' || p.kind === 'note')
+      .filter((p) => p.kind !== 'timer')
       .map((p) => {
         const body = p.items?.length
-          ? p.items.map((it) => it.text).join('\n')
+          ? p.items
+              .map((it) => `${it.done ? '[x]' : '[ ]'} ${it.text}`)
+              .join('\n')
           : p.text ?? '';
-        return `${p.title}:\n${body}`.trim();
+        const armed = p.kind === 'capture' && p.armed ? ' (recording)' : '';
+        return `${p.kind.toUpperCase()} — ${p.title}${armed}:\n${body}`.trim();
       })
-      .filter(Boolean);
+      .filter((block) => block.split('\n').length > 1 || !block.endsWith(':'));
     return parts.length ? parts.join('\n\n') : undefined;
   }, [panels]);
 

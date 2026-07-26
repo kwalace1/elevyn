@@ -3,6 +3,7 @@ import type { ElevynState, SurfaceCommand } from '../types';
 import { elevynApi } from '../services/api/client';
 import { BrowserSpeechRecognition } from '../services/voice/recognition';
 import { ElevynSpeech } from '../services/voice/elevynSpeech';
+import { SessionMemory } from '../services/session/memory';
 import { matchAddress, matchCaptureShortcut } from '../utils/wakeWord';
 
 type ListenPhase = 'wake' | 'command';
@@ -33,6 +34,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
 
   const recognitionRef = useRef(new BrowserSpeechRecognition());
   const ttsRef = useRef(new ElevynSpeech());
+  const sessionRef = useRef(new SessionMemory());
   const processingRef = useRef(false);
   const phaseRef = useRef<ListenPhase>('wake');
   const stateRef = useRef<ElevynState>('idle');
@@ -182,7 +184,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           phaseRef.current = 'wake';
           setState('idle');
           stateRef.current = 'idle';
-          speak('Alright.', resumeWakeSoon);
+          speak('Of course.', resumeWakeSoon);
           return;
         }
         if (!readdressed) {
@@ -211,8 +213,27 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       setError(null);
 
       try {
-        const context = getContextRef.current?.();
+        const panelContext = getContextRef.current?.();
+        const sessionBlock = sessionRef.current.toContextBlock();
+        const contextParts = [
+          sessionBlock,
+          panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
+        ].filter(Boolean);
+        const context = contextParts.length
+          ? contextParts.join('\n\n').slice(0, 7500)
+          : undefined;
+
+        sessionRef.current.addTurn('user', toSend);
         const { intent, execution } = await elevynApi.interpret(toSend, context);
+
+        // Session bookkeeping from brain args.
+        if (intent.args?.clearSession === true) {
+          sessionRef.current.clear();
+        }
+        const fact = intent.args?.sessionFact;
+        if (typeof fact === 'string' && fact.trim()) {
+          sessionRef.current.addFact(fact);
+        }
 
         // Flip the surface immediately so work mode never looks "stuck loading"
         // while speech is synthesizing.
@@ -243,10 +264,33 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           }
         }
 
+        // Meeting wrap-up: stop capture + materialize action items as tasks.
+        if (intent.args?.stopCapture === true) {
+          onSurfaceRef.current?.({ op: 'stopCapture' });
+          captureArmedRef.current = false;
+        }
+        const actionItems = intent.args?.actionItems;
+        if (Array.isArray(actionItems)) {
+          for (const item of actionItems) {
+            if (typeof item === 'string' && item.trim()) {
+              onSurfaceRef.current?.({ op: 'createTask', text: item.trim() });
+            }
+          }
+        }
+
         const reply =
           execution && !execution.success
             ? execution.message
             : intent.reply;
+
+        // Capture lines stay on the panel — don't flood session chat history.
+        const silent =
+          intent.type === 'surface' && intent.surface?.op === 'appendCapture';
+        if (silent) {
+          sessionRef.current.dropLastUserTurn();
+        } else if (reply.trim()) {
+          sessionRef.current.addTurn('assistant', reply);
+        }
 
         // "copy that" — write on-screen notes to the system clipboard.
         const clipboard = intent.args?.clipboard;
@@ -264,8 +308,6 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const resume = nextAwait ? resumeConversationRef.current : resumeWakeSoon;
 
         // Meeting capture lines stay silent — visual confirm only, stay listening.
-        const silent =
-          intent.type === 'surface' && intent.surface?.op === 'appendCapture';
         if (silent || !reply.trim()) {
           setResponse(silent ? 'Captured.' : reply);
           setState('idle');
@@ -293,7 +335,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const message =
           err instanceof Error ? err.message : 'Something went wrong.';
         setError(message);
-        speak('Sorry — I could not reach the Elevyn brain.', resumeWakeSoon);
+        speak('Pardon me — I could not reach the Elevyn brain.', resumeWakeSoon);
       } finally {
         processingRef.current = false;
       }
@@ -331,7 +373,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const wakeGreetings = useRef([
     'Yes?',
     'Go ahead.',
-    'I am listening.',
+    'At your service.',
   ]);
   const greetIndexRef = useRef(0);
 
