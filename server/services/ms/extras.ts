@@ -226,42 +226,73 @@ export async function findTeamChannel(
   channelHint?: string,
 ): Promise<TeamChannel | null> {
   const teamNeedle = teamHint.trim().toLowerCase();
-  const channelNeedle = (channelHint ?? 'general').trim().toLowerCase();
-  if (!teamNeedle) return null;
+  const channelNeedle = (channelHint ?? teamHint).trim().toLowerCase();
+  if (!teamNeedle && !channelNeedle) return null;
 
   const teams = await graphGet<{
     value?: Array<{ id?: string; displayName?: string }>;
   }>(accessToken, '/me/joinedTeams?$select=id,displayName&$top=50');
 
-  const team =
-    (teams.value ?? []).find((t) =>
+  const all = teams.value ?? [];
+  // Prefer an exact/partial team match, then fall back to scanning every team
+  // for a channel name match (people often say the channel, not the team).
+  const ordered = [
+    ...all.filter((t) =>
       (t.displayName ?? '').toLowerCase().includes(teamNeedle),
-    ) ?? null;
-  if (!team?.id) return null;
+    ),
+    ...all.filter(
+      (t) => !(t.displayName ?? '').toLowerCase().includes(teamNeedle),
+    ),
+  ];
 
-  const channels = await graphGet<{
-    value?: Array<{ id?: string; displayName?: string }>;
-  }>(
-    accessToken,
-    `/teams/${encodeURIComponent(team.id)}/channels?$select=id,displayName&$top=50`,
-  );
+  let best: TeamChannel | null = null;
 
-  const channel =
-    (channels.value ?? []).find((c) =>
-      (c.displayName ?? '').toLowerCase().includes(channelNeedle),
-    ) ??
-    (channels.value ?? []).find(
-      (c) => (c.displayName ?? '').toLowerCase() === 'general',
-    ) ??
-    channels.value?.[0];
+  for (const team of ordered) {
+    if (!team.id) continue;
+    const channels = await graphGet<{
+      value?: Array<{ id?: string; displayName?: string }>;
+    }>(
+      accessToken,
+      `/teams/${encodeURIComponent(team.id)}/channels?$select=id,displayName&$top=50`,
+    );
 
-  if (!channel?.id) return null;
-  return {
-    teamId: team.id,
-    teamName: team.displayName?.trim() || teamHint,
-    channelId: channel.id,
-    channelName: channel.displayName?.trim() || 'General',
-  };
+    const list = channels.value ?? [];
+    const channel =
+      list.find((c) =>
+        (c.displayName ?? '').toLowerCase().includes(channelNeedle),
+      ) ??
+      list.find((c) =>
+        channelNeedle
+          .split(/\s+/)
+          .filter((w) => w.length > 2)
+          .every((w) => (c.displayName ?? '').toLowerCase().includes(w)),
+      ) ??
+      (teamNeedle === channelNeedle
+        ? list.find((c) => (c.displayName ?? '').toLowerCase() === 'general')
+        : undefined);
+
+    if (channel?.id) {
+      const hit: TeamChannel = {
+        teamId: team.id,
+        teamName: team.displayName?.trim() || teamHint,
+        channelId: channel.id,
+        channelName: channel.displayName?.trim() || 'General',
+      };
+      // Prefer channel name matches over falling through to General.
+      if (
+        (channel.displayName ?? '').toLowerCase().includes(channelNeedle) ||
+        channelNeedle
+          .split(/\s+/)
+          .filter((w) => w.length > 2)
+          .every((w) => (channel.displayName ?? '').toLowerCase().includes(w))
+      ) {
+        return hit;
+      }
+      best ??= hit;
+    }
+  }
+
+  return best;
 }
 
 export async function readChannelMessages(

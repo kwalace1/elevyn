@@ -360,14 +360,33 @@ export async function tryMicrosoftWriteIntent(
     }
   }
 
-  // Channel post
-  const channelPost = original.match(
-    /^(?:please\s+)?(?:(?:can you |could you )?)?(?:post|send|message)\s+(?:in|to)\s+(?:the\s+)?(.+?)\s+channel(?:\s+(?:in|on|for)\s+(.+?))?\s+(?:that|saying)\s+(.+)$/i,
-  );
+  // Channel post — flexible spoken forms:
+  // "post in the marketing channel that …"
+  // "send a teams message in dw growth and capital channel that says …"
+  // "message the elevyn channel saying …"
+  const channelPost =
+    original.match(
+      /^(?:please\s+)?(?:(?:can you |could you )?)?(?:send\s+(?:a\s+)?(?:team'?s?|teams)\s+message|post|send|message)\s+(?:in|to|on)\s+(?:the\s+)?(.+?)\s+channel(?:\s+(?:in|on|for|to)\s+(?:the\s+)?(.+?))?\s+(?:that\s+says|that|saying|to\s+say)\s+(.+)$/i,
+    ) ||
+    original.match(
+      /^(?:please\s+)?(?:(?:can you |could you )?)?(?:post|send|message)\s+(?:in|to)\s+(?:the\s+)?(.+?)\s+channel(?:\s+(?:in|on|for)\s+(.+?))?\s+(?:that|saying)\s+(.+)$/i,
+    );
   if (channelPost) {
-    const channelHint = channelPost[1].trim();
-    const teamHint = (channelPost[2] ?? channelHint).trim();
+    let channelHint = channelPost[1].trim();
+    // Strip trailing "to the team" style filler from the channel name capture.
+    channelHint = channelHint
+      .replace(/\s+(?:to|for)\s+(?:the\s+)?(?:team|group|everyone)$/i, '')
+      .trim();
+    const teamHint = (channelPost[2] ?? channelHint)
+      .replace(/\b(?:the\s+)?(?:team|group|everyone)\b/gi, '')
+      .trim() || channelHint;
     const message = channelPost[3].replace(/[.!?]+$/, '').trim();
+    if (!message) {
+      return {
+        type: 'chat',
+        reply: 'What should I post in that channel?',
+      };
+    }
     try {
       const ch = await findTeamChannel(accessToken, teamHint, channelHint);
       if (!ch) {
