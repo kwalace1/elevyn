@@ -1,7 +1,10 @@
 import { GlassPanel } from '../ui/GlassPanel';
 import { StatusDot } from '../ui/StatusDot';
 import type { DashboardPayload } from '../../services/api/client';
-import type { ElevynState, RunningApp } from '../../types';
+import type { AgendaEvent } from '../../services/memory/durable';
+import type { SessionSnapshot } from '../../services/session/memory';
+import { formatAgendaWhen } from '../../utils/agendaParse';
+import type { ElevynState } from '../../types';
 
 interface DashboardProps {
   data: DashboardPayload | null;
@@ -10,56 +13,66 @@ interface DashboardProps {
   state: ElevynState;
   aiProvider: string | null;
   error: string | null;
+  presenceStatus?: string;
+  agenda?: AgendaEvent[];
+  session?: SessionSnapshot;
+  memoryEpoch?: number;
 }
 
-export function LeftRail({ data, aiProvider }: Pick<DashboardProps, 'data' | 'aiProvider'>) {
+export function LeftRail({
+  data,
+  aiProvider,
+  presenceStatus,
+  agenda = [],
+}: Pick<
+  DashboardProps,
+  'data' | 'aiProvider' | 'presenceStatus' | 'agenda' | 'memoryEpoch'
+>) {
   const system = data?.system;
+  const upcoming = agenda.slice(0, 4);
 
   return (
     <div className="rail rail--left">
-      <GlassPanel title="Presence">
+      <GlassPanel title="Standing by">
         <div className="stack">
+          <p className="presence-line">{presenceStatus ?? 'All systems standing by'}</p>
           <StatusDot
-            online={system?.macbook.online ?? false}
-            label="MacBook"
-            detail={system?.macbook.detail}
-          />
-          <StatusDot
-            online={system?.windows.online ?? false}
-            label="Windows PC"
-            detail={system?.windows.detail}
+            online={Boolean(aiProvider)}
+            label="Brain"
+            detail={aiProvider ? aiProvider : 'Local intent engine'}
           />
           <StatusDot
             online={system?.internet.online ?? false}
-            label="Internet"
-            detail={system?.internet.detail}
-          />
-          <StatusDot
-            online={Boolean(aiProvider)}
-            label="AI Provider"
-            detail={aiProvider ? aiProvider : 'Local intent engine'}
+            label="Link"
+            detail={system?.internet.detail ?? 'Checking…'}
           />
         </div>
       </GlassPanel>
 
-      <GlassPanel title="Weather" action={<DemoTag />}>
-        {data?.weather ? (
-          <div className="weather">
-            <div className="weather__temp">{data.weather.temperatureF}°</div>
-            <div className="weather__meta">
-              <span>{data.weather.condition}</span>
-              <span>
-                H {data.weather.highF}° · L {data.weather.lowF}°
+      <GlassPanel title="Agenda">
+        <div className="stack">
+          {upcoming.map((event) => (
+            <div key={event.id} className="calendar-item">
+              <span className="calendar-item__time">
+                {formatAgendaWhen(event.start)}
               </span>
-              <span className="muted">{data.weather.location}</span>
+              <div>
+                <div className="calendar-item__title">{event.title}</div>
+                <div className="muted">
+                  {event.source === 'voice' ? 'Voice' : 'Calendar'}
+                </div>
+              </div>
             </div>
-          </div>
-        ) : (
-          <p className="muted">Syncing…</p>
-        )}
+          ))}
+          {!upcoming.length ? (
+            <p className="muted">
+              Nothing scheduled — say “meeting with Sarah at 3.”
+            </p>
+          ) : null}
+        </div>
       </GlassPanel>
 
-      <GlassPanel title="System Health">
+      <GlassPanel title="Core">
         {system ? (
           <div className="metrics">
             <Metric label="CPU" value={`${system.health.cpuLoad}%`} />
@@ -78,50 +91,17 @@ export function LeftRail({ data, aiProvider }: Pick<DashboardProps, 'data' | 'ai
 }
 
 export function RightRail({
-  data,
   transcript,
   response,
   state,
   error,
+  session,
 }: DashboardProps) {
+  const facts = (session?.facts ?? []).slice(-4).reverse();
+  const turns = (session?.turns ?? []).slice(-3).reverse();
+
   return (
     <div className="rail rail--right">
-      <GlassPanel title="Today" action={<DemoTag />}>
-        <div className="stack">
-          {(data?.calendar ?? []).map((event) => (
-            <div key={event.id} className="calendar-item">
-              <span className="calendar-item__time">
-                {new Date(event.start).toLocaleTimeString('en-US', {
-                  hour: 'numeric',
-                  minute: '2-digit',
-                })}
-              </span>
-              <div>
-                <div className="calendar-item__title">{event.title}</div>
-                {event.location ? (
-                  <div className="muted">{event.location}</div>
-                ) : null}
-              </div>
-            </div>
-          ))}
-          {!data?.calendar?.length ? <p className="muted">No events</p> : null}
-        </div>
-      </GlassPanel>
-
-      <GlassPanel title="Notifications" action={<DemoTag />}>
-        <div className="stack">
-          {(data?.notifications ?? []).map((n) => (
-            <div key={n.id} className="notice">
-              <div className="notice__title">
-                {n.unread ? <span className="notice__pip" /> : null}
-                {n.title}
-              </div>
-              <div className="muted">{n.body}</div>
-            </div>
-          ))}
-        </div>
-      </GlassPanel>
-
       <GlassPanel title="Voice">
         <div className="voice-feed">
           <div className="voice-feed__block">
@@ -136,22 +116,33 @@ export function RightRail({
         </div>
       </GlassPanel>
 
-      <GlassPanel title="Running">
-        <div className="app-list">
-          {(data?.system.apps ?? []).map((app: RunningApp) => (
-            <span key={app.name} className="app-chip">
-              {app.name}
-            </span>
-          ))}
-          {!data?.system.apps?.length ? <p className="muted">—</p> : null}
+      <GlassPanel title="Session">
+        <div className="stack">
+          {facts.length ? (
+            facts.map((fact, i) => (
+              <div key={`${i}-${fact.slice(0, 24)}`} className="notice">
+                <div className="notice__title">{fact}</div>
+              </div>
+            ))
+          ) : (
+            <p className="muted">Say “remember that…” to pin a fact.</p>
+          )}
+          {turns.length ? (
+            <div className="session-turns">
+              <span className="voice-feed__label">Recent</span>
+              {turns.map((t, i) => (
+                <p key={`${t.at}-${i}`} className="muted session-turns__line">
+                  <span>{t.role === 'user' ? 'You' : 'Elevyn'}</span>
+                  {t.text.slice(0, 72)}
+                  {t.text.length > 72 ? '…' : ''}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </div>
       </GlassPanel>
     </div>
   );
-}
-
-function DemoTag() {
-  return <span className="panel-tag">Demo</span>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

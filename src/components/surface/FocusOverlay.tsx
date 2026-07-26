@@ -7,6 +7,7 @@ import { PanelCard } from './PanelCard';
 interface FocusOverlayProps {
   view: SurfaceView;
   state: ElevynState;
+  voiceLevel?: number;
   transcript: string;
   response: string;
   panels: SurfacePanel[];
@@ -54,6 +55,7 @@ const STATE_LABEL: Record<ElevynState, string> = {
 export function FocusOverlay({
   view,
   state,
+  voiceLevel = 0,
   transcript,
   response,
   panels,
@@ -136,7 +138,7 @@ export function FocusOverlay({
         <div className="work-surface__body">
           <aside className="work-dock">
             <div className="work-dock__presence">
-              <FocusOrb state={state} minimal variant="work" />
+              <FocusOrb state={state} minimal variant="work" level={voiceLevel} />
               <div className="work-dock__status">
                 <span className="work-dock__brand">Elevyn</span>
                 <span className={`work-dock__state is-${state}`}>
@@ -256,7 +258,7 @@ export function FocusOverlay({
         <span className="focus__stage-index" aria-hidden>
           DIRECT CHANNEL / ELEVEN
         </span>
-        <FocusOrb state={state} />
+        <FocusOrb state={state} level={voiceLevel} />
 
         <motion.h1
           className="focus__greeting"

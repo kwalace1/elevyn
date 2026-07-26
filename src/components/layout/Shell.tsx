@@ -147,8 +147,14 @@ export function Shell() {
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.75, delay: 0.18 }}
         >
-          <span className="shell__rail-index">01 / ENVIRONMENT</span>
-          <LeftRail data={data} aiProvider={elevyn.aiProvider} />
+          <span className="shell__rail-index">01 / PRESENCE</span>
+          <LeftRail
+            data={data}
+            aiProvider={elevyn.aiProvider}
+            presenceStatus={presenceStatus}
+            agenda={elevyn.getUpcomingAgenda()}
+            memoryEpoch={elevyn.memoryEpoch}
+          />
         </motion.div>
 
         <section className="shell__center">
@@ -157,7 +163,7 @@ export function Shell() {
             <i />
             <span>{elevyn.state === 'idle' ? 'Standing by' : 'Core online'}</span>
           </div>
-          <AiCore state={elevyn.state} />
+          <AiCore state={elevyn.state} level={elevyn.voiceLevel} />
           <MicButton
             state={elevyn.state}
             armed={elevyn.armed}
@@ -202,7 +208,7 @@ export function Shell() {
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.75, delay: 0.24 }}
         >
-          <span className="shell__rail-index">02 / INTELLIGENCE FEED</span>
+          <span className="shell__rail-index">02 / CHANNEL</span>
           <RightRail
             data={data}
             transcript={elevyn.transcript}
@@ -210,6 +216,8 @@ export function Shell() {
             state={elevyn.state}
             aiProvider={elevyn.aiProvider}
             error={elevyn.error}
+            session={elevyn.getSessionSnapshot()}
+            memoryEpoch={elevyn.memoryEpoch}
           />
         </motion.div>
       </main>
@@ -227,6 +235,7 @@ export function Shell() {
             key="focus"
             view={surface.view}
             state={elevyn.state}
+            voiceLevel={elevyn.voiceLevel}
             transcript={elevyn.transcript}
             response={elevyn.response}
             panels={surface.panels}

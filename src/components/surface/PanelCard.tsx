@@ -70,11 +70,11 @@ export function PanelCard({
   return (
     <motion.div
       layout
-      initial={{ opacity: 0, y: 16, scale: 0.96 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -12, scale: 0.96 }}
-      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-      className={`panel-card panel-card--${panel.kind}`}
+      initial={{ opacity: 0, y: 28, scale: 0.92, filter: 'blur(10px)' }}
+      animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
+      exit={{ opacity: 0, y: -14, scale: 0.94, filter: 'blur(6px)' }}
+      transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+      className={`panel-card panel-card--${panel.kind} panel-card--materialize`}
     >
       <div className="panel-card__head">
         <span className="panel-card__kind">

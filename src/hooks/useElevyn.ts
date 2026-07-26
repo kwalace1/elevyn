@@ -53,6 +53,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const [armed, setArmed] = useState(true);
   /** Bumps when durable agenda/memory changes so UI status can refresh. */
   const [memoryEpoch, setMemoryEpoch] = useState(0);
+  /** Live TTS amplitude 0–1 — drives orb presence while speaking. */
+  const [voiceLevel, setVoiceLevel] = useState(0);
 
   const recognitionRef = useRef(new BrowserSpeechRecognition());
   const ttsRef = useRef(new ElevynSpeech());
@@ -900,6 +902,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     };
   }, []);
 
+  // Live speech amplitude → orb presence.
+  useEffect(() => {
+    return ttsRef.current.subscribeLevel(setVoiceLevel);
+  }, []);
+
   // Optional ICS calendar → durable agenda (when ELEVYN_CALENDAR_ICS is set).
   useEffect(() => {
     if (!brainOnline) return;
@@ -1046,6 +1053,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     aiProvider,
     armed,
     memoryEpoch,
+    voiceLevel,
     speechSupported: recognitionRef.current.supported,
     startListening,
     stopListening,
