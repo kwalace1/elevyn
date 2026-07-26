@@ -62,7 +62,8 @@ export function createApp(): Express {
       if (req.method === 'OPTIONS') return next();
       if (req.path === '/health') return next();
       // OAuth must complete without the Elevyn API token.
-      if (req.path === '/msauth' || req.path === '/ms/login') return next();
+      if (req.path === '/msauth' || req.path === '/mslogin' || req.path === '/ms/login')
+        return next();
 
       const header = req.get('authorization') ?? '';
       const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';

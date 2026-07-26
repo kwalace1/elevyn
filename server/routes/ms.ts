@@ -1,5 +1,8 @@
 /**
- * Microsoft 365 routes — login, callback alias, status, logout, brief.
+ * Microsoft 365 routes.
+ *
+ * Vercel’s /api catch-all reliably serves /api/:segment but can 404 on
+ * /api/:a/:b — so every public MS path is a single segment (mslogin, msauth, …).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
@@ -22,8 +25,8 @@ import {
 } from '../services/ms/graph.js';
 
 async function withMs(
-  req: Request,
-  res: Response,
+  _req: Request,
+  _res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
@@ -33,24 +36,28 @@ async function withMs(
   }
 }
 
-export function createMsRouter(): Router {
-  const router = Router();
-
-  router.get('/ms/login', withMs, (req, res) => {
+function mountLogin(router: Router, path: string): void {
+  router.get(path, withMs, (req, res) => {
     beginLogin(req, res);
   });
+}
 
-  router.get('/ms/status', withMs, async (req, res) => {
+function mountStatus(router: Router, path: string): void {
+  router.get(path, withMs, async (req, res) => {
     const bundle = await getValidAccessToken(req, res);
     res.json(statusFromBundle(bundle));
   });
+}
 
-  router.post('/ms/logout', withMs, (req, res) => {
+function mountLogout(router: Router, path: string): void {
+  router.post(path, withMs, (req, res) => {
     clearSession(req, res);
     res.json({ ok: true });
   });
+}
 
-  router.get('/ms/brief', withMs, async (req, res) => {
+function mountBrief(router: Router, path: string): void {
+  router.get(path, withMs, async (req, res) => {
     const bundle = await getValidAccessToken(req, res);
     if (!bundle) {
       res.status(401).json({
@@ -58,7 +65,7 @@ export function createMsRouter(): Router {
         configured: isMicrosoftConfigured(),
         brief: null,
         error: isMicrosoftConfigured()
-          ? 'Not connected. Say “connect Microsoft” or open /api/ms/login.'
+          ? 'Not connected. Say “connect Microsoft” or open /api/mslogin.'
           : 'Microsoft 365 is not configured on this brain.',
       });
       return;
@@ -76,8 +83,10 @@ export function createMsRouter(): Router {
       res.status(502).json({ connected: true, configured: true, error: message });
     }
   });
+}
 
-  router.get('/ms/mail', withMs, async (req, res) => {
+function mountMail(router: Router, path: string): void {
+  router.get(path, withMs, async (req, res) => {
     const bundle = await getValidAccessToken(req, res);
     if (!bundle) {
       res.status(401).json({ error: 'Not connected' });
@@ -93,8 +102,10 @@ export function createMsRouter(): Router {
       res.status(502).json({ error: message });
     }
   });
+}
 
-  router.get('/ms/teams', withMs, async (req, res) => {
+function mountTeams(router: Router, path: string): void {
+  router.get(path, withMs, async (req, res) => {
     const bundle = await getValidAccessToken(req, res);
     if (!bundle) {
       res.status(401).json({ error: 'Not connected' });
@@ -108,6 +119,26 @@ export function createMsRouter(): Router {
       res.status(502).json({ error: message });
     }
   });
+}
+
+export function createMsRouter(): Router {
+  const router = Router();
+
+  // Flat paths — required on Vercel.
+  mountLogin(router, '/mslogin');
+  mountStatus(router, '/msstatus');
+  mountLogout(router, '/mslogout');
+  mountBrief(router, '/msbrief');
+  mountMail(router, '/msmail');
+  mountTeams(router, '/msteams');
+
+  // Nested aliases — fine on local Express / Vite proxy.
+  mountLogin(router, '/ms/login');
+  mountStatus(router, '/ms/status');
+  mountLogout(router, '/ms/logout');
+  mountBrief(router, '/ms/brief');
+  mountMail(router, '/ms/mail');
+  mountTeams(router, '/ms/teams');
 
   return router;
 }

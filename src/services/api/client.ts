@@ -90,8 +90,8 @@ export const elevynApi = {
         configured: boolean;
         connected: boolean;
         account: string | null;
-      }>('/api/ms/status'),
+      }>('/api/msstatus'),
     logout: () =>
-      request<{ ok: boolean }>('/api/ms/logout', { method: 'POST' }),
+      request<{ ok: boolean }>('/api/mslogout', { method: 'POST' }),
   },
 };

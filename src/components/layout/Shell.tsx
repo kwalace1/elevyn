@@ -177,7 +177,7 @@ export function Shell() {
             memoryEpoch={elevyn.memoryEpoch}
             microsoft={microsoft}
             onConnectMicrosoft={() => {
-              window.location.assign(`${API_BASE}/api/ms/login`);
+              window.location.assign(`${API_BASE}/api/mslogin`);
             }}
             onDisconnectMicrosoft={() => {
               void elevynApi.microsoft.logout().then(() => refreshMicrosoft());

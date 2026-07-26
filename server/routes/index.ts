@@ -82,7 +82,7 @@ export function createAiRouter(
         intent: {
           type: 'chat',
           reply: 'Opening Microsoft sign-in.',
-          args: { openUrl: '/api/ms/login' },
+          args: { openUrl: '/api/mslogin' },
         },
         execution: null,
       });
@@ -196,7 +196,7 @@ export function createAiRouter(
           type: 'chat',
           reply:
             'Microsoft 365 is not connected yet. Say “connect Microsoft” and I will open sign-in.',
-          args: { openUrl: '/api/ms/login' },
+          args: { openUrl: '/api/mslogin' },
         },
         execution: null,
       });
