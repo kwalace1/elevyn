@@ -11,6 +11,19 @@ import type { AIProviderRegistry } from './registry.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { MemoryService } from '../memory/store.js';
 
+/** Kevin's timezone — Vercel functions run in UTC, so never trust server local time. */
+const TIME_ZONE = process.env.ELEVYN_TZ ?? 'America/New_York';
+
+function easternHour(): number {
+  return Number(
+    new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      hour12: false,
+      timeZone: TIME_ZONE,
+    }).format(new Date()),
+  );
+}
+
 const SYSTEM_PROMPT = `You are Elevyn, Kevin's personal AI aide — soft-spoken, precise, faintly like Jarvis: capable, calm, never stiff or chatty.
 Speak short British English suitable for text-to-speech (1-2 sentences max).
 Confirmations: "Certainly.", "Of course.", "Right away.", "Noted.", "Understood.", "Done."
@@ -162,8 +175,19 @@ export class ElevynBrain {
       const time = new Date().toLocaleTimeString('en-US', {
         hour: 'numeric',
         minute: '2-digit',
+        timeZone: TIME_ZONE,
       });
       return { type: 'chat', reply: `It is ${time}.` };
+    }
+
+    if (/\b(what('?s| is) (the |today'?s )?date|what day is (it|today))\b/i.test(lower)) {
+      const date = new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        timeZone: TIME_ZONE,
+      });
+      return { type: 'chat', reply: `It is ${date}.` };
     }
 
     if (/\b(who are you|what are you|introduce yourself)\b/i.test(lower)) {
@@ -187,7 +211,7 @@ export class ElevynBrain {
     }
 
     if (/^(hi|hello|hey|good morning|good afternoon|good evening)\b/i.test(lower)) {
-      const hour = new Date().getHours();
+      const hour = easternHour();
       const greeting =
         hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
       return { type: 'chat', reply: `${greeting}. How may I help?` };

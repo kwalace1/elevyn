@@ -85,7 +85,7 @@ export function Shell() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
         >
-          <div className="shell__clock-label">Local time · EST</div>
+          <div className="shell__clock-label">Local time · Eastern</div>
           <div className="shell__time">{time}</div>
           <div className="shell__date">{date}</div>
         </motion.div>

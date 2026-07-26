@@ -43,6 +43,27 @@ export function AiCore({ state }: AiCoreProps) {
         }}
       />
 
+      {/* Particulate ember ring — the burning-debris halo. */}
+      <motion.div
+        className="ai-core__ember"
+        aria-hidden
+        animate={{ rotate: isAlive ? 360 : 0, opacity: isAlive ? 1 : 0.25 }}
+        transition={{
+          rotate: { duration: 90, repeat: Infinity, ease: 'linear' },
+          opacity: { duration: 1 },
+        }}
+      />
+      <motion.div
+        className="ai-core__ember ai-core__ember--inner"
+        aria-hidden
+        animate={{ rotate: isAlive ? -360 : 0 }}
+        transition={{
+          duration: state === 'thinking' ? 28 : 60,
+          repeat: Infinity,
+          ease: 'linear',
+        }}
+      />
+
       <motion.div
         className="ai-core__orbit ai-core__orbit--outer"
         animate={{ rotate: isAlive ? 360 : 0 }}
@@ -78,14 +99,14 @@ export function AiCore({ state }: AiCoreProps) {
           scale: pulse,
           boxShadow:
             state === 'listening'
-              ? '0 0 60px rgba(0, 229, 255, 0.55), 0 0 120px rgba(0, 229, 255, 0.25)'
+              ? '0 0 60px rgba(255, 166, 42, 0.55), 0 0 120px rgba(255, 140, 20, 0.25)'
               : state === 'speaking'
-                ? '0 0 50px rgba(0, 229, 255, 0.45), 0 0 100px rgba(0, 229, 255, 0.2)'
+                ? '0 0 50px rgba(255, 166, 42, 0.45), 0 0 100px rgba(255, 140, 20, 0.2)'
                 : state === 'thinking'
-                  ? '0 0 40px rgba(0, 229, 255, 0.35), inset 0 0 40px rgba(0, 229, 255, 0.15)'
+                  ? '0 0 40px rgba(255, 166, 42, 0.35), inset 0 0 40px rgba(255, 166, 42, 0.15)'
                   : state === 'offline'
                     ? '0 0 20px rgba(120, 120, 120, 0.2)'
-                    : '0 0 40px rgba(0, 229, 255, 0.28), 0 0 80px rgba(0, 229, 255, 0.12)',
+                    : '0 0 40px rgba(255, 166, 42, 0.28), 0 0 80px rgba(255, 140, 20, 0.12)',
         }}
         transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
       >
