@@ -17,7 +17,7 @@ function titleFrom(text: string, fallback: string): string {
   return words.length ? words : fallback;
 }
 
-const STORAGE_KEY = 'elevyn.surface.v1';
+const STORAGE_KEY = 'elevyn.surface.v2';
 
 interface PersistedSurface {
   view: SurfaceView;
@@ -38,7 +38,8 @@ function loadPersisted(): PersistedSurface | null {
       return p;
     });
     return {
-      view: parsed.view === 'work' || parsed.view === 'focus' ? parsed.view : 'dashboard',
+      // Resting home is the ambient orb. Migrate old “dashboard home” saves.
+      view: parsed.view === 'work' ? 'work' : 'focus',
       panels,
     };
   } catch {
@@ -54,7 +55,7 @@ function loadPersisted(): PersistedSurface | null {
  */
 export function useSurface() {
   const persisted = loadPersisted();
-  const [view, setView] = useState<SurfaceView>(persisted?.view ?? 'dashboard');
+  const [view, setView] = useState<SurfaceView>(persisted?.view ?? 'focus');
   const [panels, setPanels] = useState<SurfacePanel[]>(persisted?.panels ?? []);
 
   useEffect(() => {

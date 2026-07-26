@@ -48,8 +48,9 @@ Control the computer:
 Change the on-screen surface or create content on screen:
 {"type":"surface","surface":{"op":"<op>","title":"<optional>","text":"<optional>","items":["..."]},"reply":"<spoken confirmation>"}
 Valid surface ops:
+- "focus": ambient orb presence ("go home", "standby", "just the orb")
 - "work": minimal work canvas ("let's work", "focus mode", "work mode")
-- "dashboard": home dashboard ("go home", "show dashboard")
+- "dashboard": systems / operator view ("show systems", "show dashboard")
 - "clear": remove panels ("clear the screen", "clean up")
 - "createNote": note in "text", optional "title". Use for pinning useful answers.
 - "createTask": task/reminder in "text"
@@ -282,16 +283,29 @@ export class ElevynBrain {
       };
     }
 
-    // Back home.
+    // Ambient orb (resting home).
     if (
-      /\b(go home|home screen|show (the )?dashboard|back to dashboard|show home)\b/i.test(
+      /\b(go home|home screen|standby|just the orb|back to (the )?orb|show home)\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'surface',
+        surface: { op: 'focus' },
+        reply: 'Standing by.',
+      };
+    }
+
+    // Operator / systems dashboard.
+    if (
+      /\b(show (the )?(dashboard|systems)|open (the )?dashboard|back to dashboard|systems view)\b/i.test(
         lower,
       )
     ) {
       return {
         type: 'surface',
         surface: { op: 'dashboard' },
-        reply: 'Back to your dashboard.',
+        reply: 'Systems view.',
       };
     }
 

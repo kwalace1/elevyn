@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ElevynState, SurfacePanel, SurfaceView } from '../../types';
 import { FocusOrb } from './FocusOrb';
 import { PanelCard } from './PanelCard';
@@ -71,6 +71,28 @@ export function FocusOverlay({
   const hint = work ? WORK_HINT[state] : STATE_HINT[state];
   const capturing = panels.some((p) => p.kind === 'capture' && p.armed);
 
+  // After a reply finishes, fade speech chrome back to the floating orb.
+  const [speechSettled, setSpeechSettled] = useState(false);
+  useEffect(() => {
+    if (work || state !== 'idle' || !response || panels.length > 0) {
+      setSpeechSettled(false);
+      return;
+    }
+    const id = window.setTimeout(() => setSpeechSettled(true), 4500);
+    return () => window.clearTimeout(id);
+  }, [work, state, response, panels.length]);
+
+  const ambient =
+    !work &&
+    state === 'idle' &&
+    !transcript &&
+    panels.length === 0 &&
+    (!response || speechSettled);
+  const active = !work && !ambient && (state !== 'idle' || Boolean(transcript || response));
+  const showGreeting =
+    !work && !ambient && (state === 'listening' || state === 'thinking');
+  const showResponse = Boolean(response) && !speechSettled;
+
   const stats = useMemo(() => {
     const notes = panels.filter((p) => p.kind === 'note').length;
     const tasks = panels.filter((p) => p.kind === 'task' || p.kind === 'list').length;
@@ -130,7 +152,7 @@ export function FocusOverlay({
           <div className="work-surface__chrome-right">
             {clock ? <span className="work-surface__clock">{clock}</span> : null}
             <button type="button" className="work-surface__exit" onClick={onExit}>
-              Exit to home
+              Back to presence
             </button>
           </div>
         </header>
@@ -224,68 +246,96 @@ export function FocusOverlay({
 
   return (
     <motion.div
-      className="focus focus--focus"
+      className={`focus focus--focus${ambient ? ' focus--ambient' : ''}${active ? ' focus--active' : ''}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
     >
       <div className="focus__atmosphere" aria-hidden />
-      <div className="focus__grid" aria-hidden />
-      <div className="focus__frame" aria-hidden>
-        <i />
-        <i />
-        <i />
-        <i />
-      </div>
 
-      <div className="focus__chrome">
-        <span className="focus__chrome-left">
-          <span className="focus__mode-mark">XI</span>
-          <span>
-            <span className="focus__system-label">Elevyn neural interface</span>
-            <span className="focus__mode">Focus channel / Active</span>
+      {!ambient ? (
+        <div className="focus__chrome">
+          <span className="focus__chrome-left">
+            <span className="focus__brand-whisper">Elevyn</span>
           </span>
-        </span>
-        <span className="focus__chrome-right">
-          <button type="button" className="focus__exit" onClick={onExit}>
-            Home
-          </button>
-        </span>
-      </div>
+          {clock ? (
+            <span className="focus__chrome-right">
+              <span className="focus__clock">{clock}</span>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="focus__stage">
-        <span className="focus__stage-index" aria-hidden>
-          DIRECT CHANNEL / ELEVEN
-        </span>
         <FocusOrb state={state} level={voiceLevel} />
 
-        <motion.h1
-          className="focus__greeting"
-          key={greeting}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-        >
-          {greeting}
-        </motion.h1>
+        <AnimatePresence mode="wait">
+          {showGreeting ? (
+            <motion.h1
+              className="focus__greeting"
+              key={greeting}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.55 }}
+            >
+              {greeting}
+            </motion.h1>
+          ) : null}
+        </AnimatePresence>
 
         <div className="focus__stream">
-          {transcript ? (
-            <p className="focus__transcript">“{transcript}”</p>
-          ) : hint ? (
-            <p className="focus__hint">{hint}</p>
+          <AnimatePresence mode="wait">
+            {transcript ? (
+              <motion.p
+                key="transcript"
+                className="focus__transcript"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+              >
+                “{transcript}”
+              </motion.p>
+            ) : response && showResponse ? null : ambient ? (
+              <motion.p
+                key="whisper"
+                className="focus__whisper"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.55 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 1.2 }}
+              >
+                Say “Hey Elevyn”
+              </motion.p>
+            ) : hint ? (
+              <motion.p
+                key="hint"
+                className="focus__hint"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                {hint}
+              </motion.p>
+            ) : null}
+          </AnimatePresence>
+          {showResponse ? (
+            <motion.p
+              className="focus__response"
+              key={response.slice(0, 24)}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+            >
+              {response}
+            </motion.p>
           ) : null}
-          {response ? <p className="focus__response">{response}</p> : null}
         </div>
       </div>
 
       {panels.length ? (
         <div className="focus__panel-zone">
-          <div className="focus__panel-header">
-            <span>Active workspace</span>
-            <span>{String(panels.length).padStart(2, '0')} objects</span>
-          </div>
           <div className="focus__panels">
             <AnimatePresence mode="popLayout">
               {panels.map((panel) => (

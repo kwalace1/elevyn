@@ -51,6 +51,12 @@ export function Shell() {
     return () => window.clearInterval(id);
   }, [refreshMicrosoft, elevyn.brainOnline, elevyn.memoryEpoch]);
 
+  // Always boot into ambient presence — never leave users on the systems dashboard.
+  useEffect(() => {
+    if (surface.view === 'dashboard') surface.enterFocus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const presenceStatus = useMemo(() => {
     const session = elevyn.getSessionSnapshot();
     const next = elevyn.getUpcomingAgenda()[0];
@@ -109,9 +115,13 @@ export function Shell() {
         elevyn.toggleListening();
       }
 
-      if (e.code === 'Escape' && surface.view !== 'dashboard') {
+      if (e.code === 'Escape' && surface.view === 'work') {
         e.preventDefault();
-        surface.goDashboard();
+        surface.enterFocus();
+        elevyn.stopListening();
+      } else if (e.code === 'Escape' && surface.view === 'dashboard') {
+        e.preventDefault();
+        surface.enterFocus();
         elevyn.stopListening();
       }
     };
@@ -119,146 +129,157 @@ export function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [elevyn, surface]);
 
-  const inFocus = surface.view !== 'dashboard';
+  const showSystems = surface.view === 'dashboard';
+  const inPresence = surface.view !== 'dashboard';
 
   return (
-    <div className="shell" data-state={elevyn.state}>
+    <div className="shell" data-state={elevyn.state} data-surface={surface.view}>
       <div className="shell__atmosphere" aria-hidden />
       <div className="shell__grain" aria-hidden />
-      <div className="shell__grid" aria-hidden />
-      <div className="shell__horizon" aria-hidden />
+      {showSystems ? (
+        <>
+          <div className="shell__grid" aria-hidden />
+          <div className="shell__horizon" aria-hidden />
+        </>
+      ) : null}
 
-      <header className="shell__top">
-        <motion.div
-          className="shell__identity"
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <div className="shell__identity-line">
-            <span className="shell__sigil" aria-hidden>XI</span>
-            <div>
-              <div className="shell__eyebrow">Personal intelligence system</div>
-              <div className="shell__brand">Elevyn</div>
-            </div>
-          </div>
-          <div className="shell__greeting">
-            <span className="shell__live-pip" aria-hidden />
-            {greeting}, Kevin <span className="shell__divider">/</span>{' '}
-            <span className="shell__presence-status">{presenceStatus}</span>
-          </div>
-        </motion.div>
+      {showSystems ? (
+        <>
+          <header className="shell__top">
+            <motion.div
+              className="shell__identity"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="shell__identity-line">
+                <span className="shell__sigil" aria-hidden>
+                  XI
+                </span>
+                <div>
+                  <div className="shell__eyebrow">Personal intelligence system</div>
+                  <div className="shell__brand">Elevyn</div>
+                </div>
+              </div>
+              <div className="shell__greeting">
+                <span className="shell__live-pip" aria-hidden />
+                {greeting}, Kevin <span className="shell__divider">/</span>{' '}
+                <span className="shell__presence-status">{presenceStatus}</span>
+              </div>
+            </motion.div>
 
-        <motion.div
-          className="shell__clock"
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <div className="shell__clock-label">Local time · Eastern</div>
-          <div className="shell__time">{time}</div>
-          <div className="shell__date">{date}</div>
-        </motion.div>
-      </header>
+            <motion.div
+              className="shell__clock"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="shell__clock-label">Local time · Eastern</div>
+              <div className="shell__time">{time}</div>
+              <div className="shell__date">{date}</div>
+            </motion.div>
+          </header>
 
-      <main className="shell__main">
-        <motion.div
-          className="shell__rail-wrap shell__rail-wrap--left"
-          initial={{ opacity: 0, x: -18 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.75, delay: 0.18 }}
-        >
-          <span className="shell__rail-index">01 / PRESENCE</span>
-          <LeftRail
-            data={data}
-            aiProvider={elevyn.aiProvider}
-            presenceStatus={presenceStatus}
-            agenda={elevyn.getUpcomingAgenda()}
-            memoryEpoch={elevyn.memoryEpoch}
-            microsoft={microsoft}
-            onConnectMicrosoft={() => {
-              window.location.assign(`${API_BASE}/api/mslogin`);
-            }}
-            onDisconnectMicrosoft={() => {
-              void elevynApi.microsoft.logout().then(() => refreshMicrosoft());
-            }}
-          />
-        </motion.div>
+          <main className="shell__main">
+            <motion.div
+              className="shell__rail-wrap shell__rail-wrap--left"
+              initial={{ opacity: 0, x: -18 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.75, delay: 0.18 }}
+            >
+              <span className="shell__rail-index">01 / PRESENCE</span>
+              <LeftRail
+                data={data}
+                aiProvider={elevyn.aiProvider}
+                presenceStatus={presenceStatus}
+                agenda={elevyn.getUpcomingAgenda()}
+                memoryEpoch={elevyn.memoryEpoch}
+                microsoft={microsoft}
+                onConnectMicrosoft={() => {
+                  window.location.assign(`${API_BASE}/api/mslogin`);
+                }}
+                onDisconnectMicrosoft={() => {
+                  void elevynApi.microsoft.logout().then(() => refreshMicrosoft());
+                }}
+              />
+            </motion.div>
 
-        <section className="shell__center">
-          <div className="shell__core-kicker">
-            <span>Neural interface</span>
-            <i />
-            <span>{elevyn.state === 'idle' ? 'Standing by' : 'Core online'}</span>
-          </div>
-          <AiCore state={elevyn.state} level={elevyn.voiceLevel} />
-          <MicButton
-            state={elevyn.state}
-            armed={elevyn.armed}
-            onClick={elevyn.toggleListening}
-            onToggleArmed={elevyn.toggleArmed}
-            disabled={elevyn.state === 'thinking' || elevyn.state === 'speaking'}
-          />
-          <p className="shell__hint">
-            {elevyn.speechSupported
-              ? elevyn.armed
-                ? 'Say “Hey Elevyn” or just “Elevyn…”'
-                : 'Wake word paused · click mic or press Space'
-              : 'Use Chrome for voice · brain still accepts text API'}
-          </p>
-          <div className="shell__core-telemetry" aria-hidden>
-            <span>
-              PRESENCE{' '}
-              <b>
-                {elevyn.state === 'idle'
-                  ? 'AMBIENT'
-                  : elevyn.state === 'listening'
-                    ? 'ATTENTIVE'
-                    : elevyn.state === 'thinking'
-                      ? 'PROCESSING'
-                      : elevyn.state === 'speaking'
-                        ? 'SPEAKING'
-                        : 'OFFLINE'}
-              </b>
-            </span>
-            <span>
-              VOICE <b>{elevyn.armed ? 'ARMED' : 'PAUSED'}</b>
-            </span>
-            <span>
-              LINK <b>{elevyn.brainOnline ? 'SECURE' : 'DOWN'}</b>
-            </span>
-          </div>
-        </section>
+            <section className="shell__center">
+              <div className="shell__core-kicker">
+                <span>Neural interface</span>
+                <i />
+                <span>{elevyn.state === 'idle' ? 'Standing by' : 'Core online'}</span>
+              </div>
+              <AiCore state={elevyn.state} level={elevyn.voiceLevel} />
+              <MicButton
+                state={elevyn.state}
+                armed={elevyn.armed}
+                onClick={elevyn.toggleListening}
+                onToggleArmed={elevyn.toggleArmed}
+                disabled={elevyn.state === 'thinking' || elevyn.state === 'speaking'}
+              />
+              <p className="shell__hint">
+                {elevyn.speechSupported
+                  ? elevyn.armed
+                    ? 'Say “Hey Elevyn” or just “Elevyn…”'
+                    : 'Wake word paused · click mic or press Space'
+                  : 'Use Chrome for voice · brain still accepts text API'}
+              </p>
+              <div className="shell__core-telemetry" aria-hidden>
+                <span>
+                  PRESENCE{' '}
+                  <b>
+                    {elevyn.state === 'idle'
+                      ? 'AMBIENT'
+                      : elevyn.state === 'listening'
+                        ? 'ATTENTIVE'
+                        : elevyn.state === 'thinking'
+                          ? 'PROCESSING'
+                          : elevyn.state === 'speaking'
+                            ? 'SPEAKING'
+                            : 'OFFLINE'}
+                  </b>
+                </span>
+                <span>
+                  VOICE <b>{elevyn.armed ? 'ARMED' : 'PAUSED'}</b>
+                </span>
+                <span>
+                  LINK <b>{elevyn.brainOnline ? 'SECURE' : 'DOWN'}</b>
+                </span>
+              </div>
+            </section>
 
-        <motion.div
-          className="shell__rail-wrap shell__rail-wrap--right"
-          initial={{ opacity: 0, x: 18 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.75, delay: 0.24 }}
-        >
-          <span className="shell__rail-index">02 / CHANNEL</span>
-          <RightRail
-            data={data}
-            transcript={elevyn.transcript}
-            response={elevyn.response}
-            state={elevyn.state}
-            aiProvider={elevyn.aiProvider}
-            error={elevyn.error}
-            session={elevyn.getSessionSnapshot()}
-            memoryEpoch={elevyn.memoryEpoch}
-          />
-        </motion.div>
-      </main>
+            <motion.div
+              className="shell__rail-wrap shell__rail-wrap--right"
+              initial={{ opacity: 0, x: 18 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.75, delay: 0.24 }}
+            >
+              <span className="shell__rail-index">02 / CHANNEL</span>
+              <RightRail
+                data={data}
+                transcript={elevyn.transcript}
+                response={elevyn.response}
+                state={elevyn.state}
+                aiProvider={elevyn.aiProvider}
+                error={elevyn.error}
+                session={elevyn.getSessionSnapshot()}
+                memoryEpoch={elevyn.memoryEpoch}
+              />
+            </motion.div>
+          </main>
 
-      <footer className="shell__footer" aria-hidden>
-        <span>ELVYN.OS / BUILD 01</span>
-        <span className="shell__footer-line" />
-        <span>VOICE-FIRST COMMAND ENVIRONMENT</span>
-        <span className="shell__footer-coord">40.7128° N / 74.0060° W</span>
-      </footer>
+          <footer className="shell__footer" aria-hidden>
+            <span>ELVYN.OS / BUILD 01</span>
+            <span className="shell__footer-line" />
+            <span>VOICE-FIRST COMMAND ENVIRONMENT</span>
+            <span className="shell__footer-coord">40.7128° N / 74.0060° W</span>
+          </footer>
+        </>
+      ) : null}
 
       <AnimatePresence>
-        {inFocus ? (
+        {inPresence ? (
           <FocusOverlay
             key="focus"
             view={surface.view}
@@ -270,7 +291,7 @@ export function Shell() {
             greeting={focusGreeting}
             clock={time}
             onExit={() => {
-              surface.goDashboard();
+              surface.enterFocus();
               elevyn.stopListening();
             }}
             onDismissPanel={surface.removePanel}

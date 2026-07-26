@@ -66,16 +66,16 @@ export interface CommandExecutionResult {
 
 /**
  * Surface = the visual presence Elevyn projects.
- * - dashboard: full command center (home)
- * - focus: Jarvis conversation view (orb front and centre)
+ * - focus: resting state — floating orb; chrome only when addressed
  * - work: stripped canvas where panels populate by voice
+ * - dashboard: optional operator / systems view (voice: “show systems”)
  */
 export type SurfaceView = 'dashboard' | 'focus' | 'work';
 
 export type SurfaceOp =
-  | 'focus' // wake / come forward
+  | 'focus' // wake / return to ambient orb
   | 'work' // clear to minimal work canvas
-  | 'dashboard' // return home
+  | 'dashboard' // optional systems view
   | 'clear' // remove all panels
   | 'createNote'
   | 'createTask'

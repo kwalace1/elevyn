@@ -23,7 +23,8 @@ async function graphGet<T>(accessToken: string, path: string): Promise<T> {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
-      Prefer: `outlook.timezone="${process.env.ELEVYN_TZ ?? 'America/New_York'}"`,
+      // UTC so dateTime includes Z / offset — avoids wall-clock-as-UTC bugs on the server.
+      Prefer: 'outlook.timezone="UTC"',
     },
   });
   if (!res.ok) {
@@ -31,6 +32,46 @@ async function graphGet<T>(accessToken: string, path: string): Promise<T> {
     throw new Error(`Graph ${res.status}: ${body.slice(0, 200) || res.statusText}`);
   }
   return res.json() as Promise<T>;
+}
+
+/** Convert a wall-clock time in `timeZone` to a real UTC ISO instant. */
+function zonedWallToIso(
+  y: number,
+  m: number,
+  d: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timeZone: string,
+): string {
+  let guess = Date.UTC(y, m - 1, d, hour + 4, minute, second);
+  for (let i = 0; i < 4; i++) {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
+        .formatToParts(new Date(guess))
+        .map((p) => [p.type, p.value]),
+    );
+    const want = Date.UTC(y, m - 1, d, hour, minute, second);
+    const got = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour) % 24,
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    guess += want - got;
+  }
+  return new Date(guess).toISOString();
 }
 
 function graphDate(dt?: { dateTime?: string; timeZone?: string }): string | null {
@@ -41,14 +82,23 @@ function graphDate(dt?: { dateTime?: string; timeZone?: string }): string | null
     const t = new Date(raw).getTime();
     return Number.isFinite(t) ? new Date(t).toISOString() : null;
   }
-  // Prefer header returns local wall time without offset — interpret in Elevyn TZ
-  // by appending a pseudo parse via Date with explicit parts is hard; treat as UTC
-  // label then format with Eastern in UI. Better: append offset-less as local ISO.
+  // Offset-less wall clock (legacy Prefer, or some tenants) — honor timeZone.
   const cleaned = raw.replace(/\.\d+$/, '');
-  const asLocal = new Date(cleaned);
-  if (Number.isFinite(asLocal.getTime())) return asLocal.toISOString();
-  const asUtc = new Date(`${cleaned}Z`);
-  return Number.isFinite(asUtc.getTime()) ? asUtc.toISOString() : null;
+  const m = cleaned.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/,
+  );
+  if (!m) return null;
+  const tz =
+    dt.timeZone || process.env.ELEVYN_TZ || 'America/New_York';
+  return zonedWallToIso(
+    Number(m[1]),
+    Number(m[2]),
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6] ?? 0),
+    tz,
+  );
 }
 
 export async function fetchGraphCalendar(

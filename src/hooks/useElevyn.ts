@@ -621,7 +621,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       recognitionRef.current.abort();
       syncSurfaceFlags();
       phaseRef.current = 'command';
-      // Bring Elevyn forward (dashboard → focus).
+      // Bring Elevyn forward (systems dashboard → ambient orb).
       onWakeRef.current?.();
       setState('listening');
       stateRef.current = 'listening';
