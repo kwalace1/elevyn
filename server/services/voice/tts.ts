@@ -174,7 +174,11 @@ export async function listSpeechVoices(): Promise<{
  * Set ELEVYN_TTS_PREWARM=0 on low-memory machines — it spawns Python per phrase.
  */
 export async function prewarmSpeechCache(): Promise<void> {
-  if (process.env.ELEVYN_TTS_PREWARM === '0') {
+  if (
+    process.env.ELEVYN_TTS_PREWARM === '0' ||
+    process.env.VERCEL === '1' ||
+    process.env.ELEVYN_HOSTED === '1'
+  ) {
     console.log('[tts] prewarm disabled');
     return;
   }

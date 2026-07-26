@@ -5,7 +5,12 @@ import { fileURLToPath } from 'node:url';
 import type { MemoryCategory, MemoryEntry } from '../../../src/types/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../../../data/memory');
+
+/** Serverless (Vercel) only has a writable /tmp; local Mac uses the repo data dir. */
+const DATA_DIR =
+  process.env.VERCEL || process.env.ELEVYN_HOSTED === '1'
+    ? path.join('/tmp', 'elevyn-memory')
+    : path.resolve(__dirname, '../../../../data/memory');
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
 
 /**
@@ -30,7 +35,11 @@ export class MemoryService {
   }
 
   private async persist(): Promise<void> {
-    await writeFile(STORE_PATH, JSON.stringify(this.cache ?? [], null, 2), 'utf8');
+    try {
+      await writeFile(STORE_PATH, JSON.stringify(this.cache ?? [], null, 2), 'utf8');
+    } catch {
+      // On a read-only or full /tmp, keep working from memory for this warm instance.
+    }
   }
 
   async list(category?: MemoryCategory): Promise<MemoryEntry[]> {

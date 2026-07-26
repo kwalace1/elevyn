@@ -59,60 +59,51 @@ See `.env.example` for `ELEVYN_AI_PROVIDER`, model overrides, and Ollama setting
 
 See [docs/Architecture.md](docs/Architecture.md) and [docs/Roadmap.md](docs/Roadmap.md).
 
-## Deployment
+## Deployment (GitHub + Vercel only)
 
-Elevyn splits into two deployable halves. What you get depends on **where the brain runs**.
+One Vercel project hosts **both** the UI and the brain:
 
-| Capability | UI on Vercel + hosted brain | UI on Vercel + brain on your Mac |
-|---|---|---|
-| Dashboard, work mode, panels | ✅ | ✅ |
-| Voice in (Chrome), notes, tasks, timers, capture | ✅ | ✅ |
-| Conversation via OpenRouter | ✅ | ✅ |
-| Neural TTS (edge-tts) | ✅ (Docker image ships Python) | ✅ |
-| Open/close Mac apps, lock, sleep, running apps | ❌ | ✅ |
+| Capability | On Vercel |
+|---|---|
+| Dashboard, work mode, panels | ✅ |
+| Voice in (Chrome), notes, tasks, timers, capture | ✅ |
+| Conversation via OpenRouter | ✅ |
+| Spoken replies | ✅ (browser TTS; neural Edge voice stays on Mac) |
+| Open/close Mac apps, lock, sleep | ❌ |
 
-Mac-only commands don't crash a hosted brain — they reply that the control needs the local instance.
+No Railway, Render, or other hosts required. Your Mac only needs Chrome.
 
-### 1. Frontend → Vercel
+### Deploy
 
-Import the repo in Vercel. `vercel.json` already sets the Vite build and SPA rewrites.
-
-Set these **Environment Variables** (build-time — redeploy after changing):
-
-```
-VITE_ELEVYN_API=https://your-brain-host
-VITE_ELEVYN_TOKEN=<same value as ELEVYN_API_TOKEN>
-```
-
-Without `VITE_ELEVYN_API` the deployed UI tries to reach `127.0.0.1` and will show the brain as offline.
-
-### 2. Brain → container host (Railway / Render / Fly)
-
-The included `Dockerfile` builds the brain and installs Python + `edge-tts`.
+1. Import `kwalace1/elevyn` at [vercel.com/new](https://vercel.com/new)
+2. Add **one** Environment Variable (Production + Preview):
 
 ```
-ELEVYN_HOSTED=1
-ELEVYN_API_TOKEN=<long random string>
-ELEVYN_ALLOWED_ORIGINS=https://your-app.vercel.app
-OPENROUTER_API_KEY=<key>
+OPENROUTER_API_KEY=<your key from https://openrouter.ai/keys>
+```
+
+Optional:
+
+```
 OPENROUTER_MODEL=inclusionai/ling-3.0-flash:free
+ELEVYN_AI_PROVIDER=openrouter
 ```
 
-The host injects `PORT` automatically. Locally: `npm run build:brain && npm start`.
+3. Deploy. Open the `.vercel.app` URL in **Chrome**, allow the mic, enable wake listening.
 
-> **Always set `ELEVYN_API_TOKEN` on a public brain.** Without it, anyone who finds the URL can drive Elevyn. `/api/health` stays open so the UI can show connection status.
+The frontend calls same-origin `/api/*`. Locally, Vite already proxies `/api` to the Mac brain on `:8787`, so `npm run dev` still works the same.
 
-### 3. Hybrid — Vercel UI, brain on your Mac
+### Privacy
 
-Keeps full Mac control while the UI is hosted. Run the brain locally, expose it over HTTPS (Cloudflare Tunnel / ngrok), then point `VITE_ELEVYN_API` at the tunnel URL. A Vercel page is HTTPS, so the brain must be HTTPS too.
+The public URL can be used by anyone who finds it. To lock it down, turn on **Vercel Deployment Protection** (Pro) or put a password on the deployment — don't put secrets in `VITE_*` vars; those ship to the browser.
 
 ### Running light on a slow Mac
 
 ```bash
-ELEVYN_TTS_PREWARM=0 npm run dev   # skip Python TTS warmup at boot
+ELEVYN_TTS_PREWARM=0 npm run dev
 ```
 
-Prefer OpenRouter over Ollama on low-RAM machines, and let the cloud brain handle AI while your Mac only renders the UI.
+Prefer OpenRouter over Ollama on low-RAM machines. Or skip local entirely and use the Vercel URL.
 
 ## Voice demos
 
