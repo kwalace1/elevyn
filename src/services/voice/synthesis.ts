@@ -10,22 +10,33 @@ export interface TextToSpeechService {
   stop(): void;
 }
 
-/** Ranked British / natural voice names available on macOS + Chrome. */
+/** Ranked natural voice names available across macOS, Chrome, and Edge. */
 const VOICE_PREFERENCE = [
-  // macOS premium / enhanced British
+  // macOS premium / enhanced voices. Quality wins over accent.
   /daniel \(enhanced\)/i,
   /kate \(enhanced\)/i,
   /serena \(enhanced\)/i,
   /martha \(enhanced\)/i,
+  /ava \(premium\)/i,
+  /samantha \(enhanced\)/i,
+  /zoe \(premium\)/i,
+  /allison \(enhanced\)/i,
+  /tom \(enhanced\)/i,
+  /ava/i,
+  /samantha/i,
   /daniel/i,
   /kate/i,
   /serena/i,
   /martha/i,
   /arthur/i,
-  // Chrome Google UK voices (often the best in Chrome)
+  // Chrome / Edge cloud and natural voices.
   /google uk english female/i,
   /google uk english male/i,
+  /google us english/i,
+  /microsoft.*natural/i,
+  /microsoft.*online/i,
   /en-gb-.*neural/i,
+  /en-us-.*neural/i,
   /british/i,
 ];
 
@@ -35,19 +46,20 @@ function scoreVoice(voice: SpeechSynthesisVoice): number {
 
   let score = 0;
 
-  if (lang === 'en-gb' || lang.startsWith('en-gb')) score += 100;
-  else if (lang.startsWith('en')) score += 20;
+  if (lang === 'en-gb' || lang.startsWith('en-gb')) score += 40;
+  else if (lang.startsWith('en')) score += 25;
   else return -1;
 
   for (let i = 0; i < VOICE_PREFERENCE.length; i += 1) {
     if (VOICE_PREFERENCE[i].test(name)) {
-      score += 80 - i;
+      score += 300 - i * 4;
       break;
     }
   }
 
-  if (/enhanced|premium|neural|natural|siri/i.test(name)) score += 40;
-  if (/compact/i.test(name)) score -= 25;
+  if (/enhanced|premium|neural|natural|siri/i.test(name)) score += 120;
+  if (/compact|eloquence|novelty|whisper|zarvox/i.test(name)) score -= 120;
+  if (voice.default) score += 8;
   if (voice.localService) score += 10;
 
   return score;
@@ -70,6 +82,9 @@ function pickBritishVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice 
 function humanizeForSpeech(text: string): string {
   return text
     .replace(/\s+/g, ' ')
+    .replace(/\s*[—–]\s*/g, ', ')
+    .replace(/;\s*/g, '. ')
+    .replace(/:\s+/g, ', ')
     .replace(/([.!?])\s+/g, '$1 ')
     .replace(/,\s*/g, ', ')
     .trim();
@@ -126,9 +141,10 @@ export class BrowserTextToSpeech implements TextToSpeechService {
     const speakNow = () => {
       const utterance = new SpeechSynthesisUtterance(humanizeForSpeech(text));
       utterance.lang = 'en-GB';
-      // Slightly slower + lower pitch reads less robotic on system voices.
-      utterance.rate = 0.94;
-      utterance.pitch = 0.92;
+      // Natural cadence: close to the voice's recorded baseline. Large pitch
+      // shifts make system voices noticeably synthetic.
+      utterance.rate = 0.96;
+      utterance.pitch = 1;
       utterance.volume = 1;
 
       const voice = this.resolveVoice();

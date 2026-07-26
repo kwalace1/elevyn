@@ -7,6 +7,9 @@
     "api/[[...path]].ts": {
       "maxDuration": 60,
       "includeFiles": "data/memory/**"
+    },
+    "api/speak.py": {
+      "maxDuration": 30
     }
   },
   "rewrites": [
