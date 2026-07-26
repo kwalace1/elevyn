@@ -124,14 +124,16 @@ export function matchWakeWord(transcript: string): {
 
 /**
  * Decide whether Elevyn is being addressed.
- * - Dashboard: "Hey Elevyn" / "Hey Eleven" OR bare name at the start.
- * - Work / focus: name may appear anywhere (incl. mid-sentence).
+ * - Default: "Hey Elevyn" / bare name at the start.
+ * - Work wake: name may appear mid-sentence (address only).
+ * - Command phase: only strip a *leading* name — never mid-phrase
+ *   tokens like "eleven" in "remind me at eleven".
  */
 export function matchAddress(
   transcript: string,
-  opts: { workMode?: boolean } = {},
+  opts: { workMode?: boolean; leadingOnly?: boolean } = {},
 ): { heard: boolean; remainder: string } {
-  if (!opts.workMode) return matchWakeWord(transcript);
+  if (opts.leadingOnly || !opts.workMode) return matchWakeWord(transcript);
 
   const normalized = normalizeTranscript(transcript);
   if (!normalized) return { heard: false, remainder: '' };

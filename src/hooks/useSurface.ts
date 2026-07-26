@@ -68,7 +68,7 @@ export function useSurface() {
   }, [view, panels]);
 
   const enterFocus = useCallback(() => {
-    setView((v) => (v === 'work' ? 'work' : 'focus'));
+    setView('focus');
   }, []);
 
   const enterWork = useCallback(() => setView('work'), []);

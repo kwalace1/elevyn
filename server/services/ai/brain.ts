@@ -48,8 +48,8 @@ Control the computer:
 Change the on-screen surface or create content on screen:
 {"type":"surface","surface":{"op":"<op>","title":"<optional>","text":"<optional>","items":["..."]},"reply":"<spoken confirmation>"}
 Valid surface ops:
-- "focus": ambient orb presence ("go home", "standby", "just the orb")
-- "work": minimal work canvas ("let's work", "focus mode", "work mode")
+- "focus": ambient orb presence ("go home", "leave work mode", "standby", "just the orb")
+- "work": minimal work canvas ("let's work", "work mode", "enter work mode")
 - "dashboard": systems / operator view ("show systems", "show dashboard")
 - "clear": remove panels ("clear the screen", "clean up")
 - "createNote": note in "text", optional "title". Use for pinning useful answers.
@@ -272,20 +272,21 @@ export class ElevynBrain {
   ): InterpretedIntent | null {
     // Enter minimal work canvas.
     if (
-      /\b(let'?s (get to )?work|work mode|focus mode|deep work|let'?s get started|clear the desk)\b/i.test(
+      /\b(let'?s (get to )?work|enter work( mode)?|work mode|deep work|let'?s get started|clear the desk)\b/i.test(
         lower,
-      )
+      ) &&
+      !/\b(leave|exit|end|close|quit|stop)\b.{0,12}\bwork\b/i.test(lower)
     ) {
       return {
         type: 'surface',
         surface: { op: 'work' },
-        reply: 'Work mode. Ready when you are.',
+        reply: 'Work mode.',
       };
     }
 
-    // Ambient orb (resting home).
+    // Leave work / return to ambient orb.
     if (
-      /\b(go home|home screen|standby|just the orb|back to (the )?orb|show home)\b/i.test(
+      /\b((leave|exit|end|close|quit)\s+work( mode)?|stop working|leave work mode|exit work mode|go home|home screen|standby|just the orb|back to (the )?orb|show home|back to presence)\b/i.test(
         lower,
       )
     ) {

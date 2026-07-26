@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ElevynState, SurfacePanel, SurfaceView } from '../../types';
 import { FocusOrb } from './FocusOrb';
 import { PanelCard } from './PanelCard';
@@ -28,21 +28,12 @@ const STATE_HINT: Record<ElevynState, string> = {
 };
 
 const WORK_HINT: Record<ElevynState, string> = {
-  idle: 'Address Elevyn',
+  idle: 'Say “Elevyn” anytime',
   listening: 'Listening…',
-  thinking: 'Processing…',
+  thinking: 'Working on it…',
   speaking: 'Speaking…',
   offline: 'Offline',
 };
-
-const WORK_COMMANDS = [
-  { phrase: 'make a note…', label: 'Note' },
-  { phrase: 'add a task…', label: 'Task' },
-  { phrase: 'start capture', label: 'Capture' },
-  { phrase: 'set a timer…', label: 'Timer' },
-  { phrase: 'wrap up and draft', label: 'Agency' },
-  { phrase: 'plan my afternoon', label: 'Plan' },
-];
 
 const STATE_LABEL: Record<ElevynState, string> = {
   idle: 'Standby',
@@ -61,7 +52,7 @@ export function FocusOverlay({
   panels,
   greeting,
   clock,
-  onExit,
+  onExit: _onExit,
   onDismissPanel,
   onToggleItem,
   onTimerComplete,
@@ -93,152 +84,98 @@ export function FocusOverlay({
     !work && !ambient && (state === 'listening' || state === 'thinking');
   const showResponse = Boolean(response) && !speechSettled;
 
-  const stats = useMemo(() => {
-    const notes = panels.filter((p) => p.kind === 'note').length;
-    const tasks = panels.filter((p) => p.kind === 'task' || p.kind === 'list').length;
-    const timers = panels.filter((p) => p.kind === 'timer').length;
-    const captureLines = panels
-      .filter((p) => p.kind === 'capture')
-      .reduce((n, p) => n + (p.items?.length ?? 0), 0);
-    return { notes, tasks, timers, captureLines, total: panels.length };
-  }, [panels]);
-
   if (work) {
     return (
       <motion.div
-        className="focus focus--work"
-        initial={{ opacity: 0, scale: 0.985 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.99 }}
-        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        className={`focus focus--work${emptyWork ? ' focus--work-empty' : ''}`}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
       >
-        <div className="work-surface__atmosphere" aria-hidden />
-        <div className="work-surface__scanlines" aria-hidden />
-        <div className="work-surface__frame" aria-hidden>
-          <i />
-          <i />
-          <i />
-          <i />
+        <div className="focus__atmosphere focus__atmosphere--work" aria-hidden />
+
+        <div className="work-presence">
+          <div className="work-presence__orb">
+            <FocusOrb state={state} variant="work" level={voiceLevel} />
+          </div>
+
+          <div className="work-presence__meta">
+            <span className="work-presence__brand">Elevyn</span>
+            {capturing ? (
+              <span className="work-presence__rec">
+                <span className="rec-pip" aria-hidden />
+                Capturing
+              </span>
+            ) : (
+              <span className={`work-presence__state is-${state}`}>
+                {STATE_LABEL[state]}
+              </span>
+            )}
+            {clock ? <span className="work-presence__clock">{clock}</span> : null}
+          </div>
+
+          <div className="work-presence__stream">
+            <AnimatePresence mode="wait">
+              {transcript ? (
+                <motion.p
+                  key="transcript"
+                  className="focus__transcript"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                >
+                  “{transcript}”
+                </motion.p>
+              ) : response ? null : (
+                <motion.p
+                  key="hint"
+                  className="focus__whisper"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 0.55 }}
+                  exit={{ opacity: 0 }}
+                >
+                  {hint}
+                </motion.p>
+              )}
+            </AnimatePresence>
+            {response ? (
+              <motion.p
+                className="focus__response"
+                key={response.slice(0, 24)}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                {response}
+              </motion.p>
+            ) : null}
+          </div>
         </div>
 
-        <header className="work-surface__chrome">
-          <div className="work-surface__identity">
-            <span className="work-surface__mark">WK</span>
-            <div>
-              <span className="work-surface__eyebrow">Operating surface</span>
-              <span className="work-surface__title">
-                Work mode
-                {capturing ? (
-                  <span className="work-surface__rec">
-                    <span className="rec-pip" aria-hidden />
-                    Live capture
-                  </span>
-                ) : null}
-              </span>
-            </div>
-          </div>
-
-          <div className="work-surface__stats" aria-label="Workspace stats">
-            <Stat label="Objects" value={String(stats.total).padStart(2, '0')} />
-            <Stat label="Notes" value={String(stats.notes).padStart(2, '0')} />
-            <Stat label="Tasks" value={String(stats.tasks).padStart(2, '0')} />
-            <Stat
-              label="Capture"
-              value={capturing ? String(stats.captureLines).padStart(2, '0') : '—'}
-              live={capturing}
-            />
-          </div>
-
-          <div className="work-surface__chrome-right">
-            {clock ? <span className="work-surface__clock">{clock}</span> : null}
-            <button type="button" className="work-surface__exit" onClick={onExit}>
-              Back to presence
-            </button>
-          </div>
-        </header>
-
-        <div className="work-surface__body">
-          <aside className="work-dock">
-            <div className="work-dock__presence">
-              <FocusOrb state={state} minimal variant="work" level={voiceLevel} />
-              <div className="work-dock__status">
-                <span className="work-dock__brand">Elevyn</span>
-                <span className={`work-dock__state is-${state}`}>
-                  <i aria-hidden />
-                  {STATE_LABEL[state]}
-                </span>
-              </div>
-            </div>
-
-            <div className="work-dock__stream">
-              <span className="work-dock__label">Voice channel</span>
-              <p className="work-dock__you">
-                {transcript || (state === 'listening' ? 'Listening for command…' : hint)}
-              </p>
-              {response ? <p className="work-dock__reply">{response}</p> : null}
-            </div>
-
-            <div className="work-dock__commands">
-              <span className="work-dock__label">Quick commands</span>
-              <ul>
-                {WORK_COMMANDS.map((cmd) => (
-                  <li key={cmd.phrase}>
-                    <span>{cmd.label}</span>
-                    <code>{cmd.phrase}</code>
-                  </li>
+        <div className="work-presence__canvas">
+          {emptyWork ? (
+            <motion.p
+              className="work-presence__empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.45 }}
+            >
+              Speak a note, task, or capture — it appears here.
+            </motion.p>
+          ) : (
+            <div className="work-presence__panels">
+              <AnimatePresence mode="popLayout">
+                {panels.map((panel) => (
+                  <PanelCard
+                    key={panel.id}
+                    panel={panel}
+                    onDismiss={onDismissPanel}
+                    onToggleItem={onToggleItem}
+                    onTimerComplete={onTimerComplete}
+                  />
                 ))}
-              </ul>
+              </AnimatePresence>
             </div>
-
-            <div className="work-dock__hint">
-              Say <b>Elevyn</b> anytime. While capturing, just say{' '}
-              <b>“note that…”</b>
-            </div>
-          </aside>
-
-          <main className="work-canvas">
-            <div className="work-canvas__header">
-              <span>Active workspace</span>
-              <span>
-                {emptyWork
-                  ? 'Awaiting first object'
-                  : `${String(stats.total).padStart(2, '0')} live objects`}
-              </span>
-            </div>
-
-            {emptyWork ? (
-              <div className="work-empty">
-                <div className="work-empty__pulse" aria-hidden />
-                <h2>Canvas clear</h2>
-                <p>
-                  Speak a command to populate this surface — notes, tasks,
-                  capture, and timers land here as live objects.
-                </p>
-                <div className="work-empty__grid">
-                  {WORK_COMMANDS.slice(0, 4).map((cmd) => (
-                    <div key={cmd.phrase} className="work-empty__chip">
-                      <span>{cmd.label}</span>
-                      <code>{cmd.phrase}</code>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="work-canvas__panels">
-                <AnimatePresence mode="popLayout">
-                  {panels.map((panel) => (
-                    <PanelCard
-                      key={panel.id}
-                      panel={panel}
-                      onDismiss={onDismissPanel}
-                      onToggleItem={onToggleItem}
-                      onTimerComplete={onTimerComplete}
-                    />
-                  ))}
-                </AnimatePresence>
-              </div>
-            )}
-          </main>
+          )}
         </div>
       </motion.div>
     );
@@ -352,22 +289,5 @@ export function FocusOverlay({
         </div>
       ) : null}
     </motion.div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  live,
-}: {
-  label: string;
-  value: string;
-  live?: boolean;
-}) {
-  return (
-    <div className={`work-stat ${live ? 'is-live' : ''}`}>
-      <span className="work-stat__label">{label}</span>
-      <span className="work-stat__value">{value}</span>
-    </div>
   );
 }

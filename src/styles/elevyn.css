@@ -1924,8 +1924,110 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 0;
-  background: #050302;
+  padding: 48px 36px 40px;
+  background: #000;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.focus__atmosphere--work {
+  background:
+    radial-gradient(ellipse 40% 36% at 50% 28%, rgba(255, 179, 71, 0.1), transparent 70%),
+    radial-gradient(ellipse 85% 50% at 50% 110%, rgba(60, 32, 0, 0.35), transparent 58%);
+}
+
+.work-presence {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  flex-shrink: 0;
+}
+
+.work-presence__orb .focus-orb {
+  width: min(200px, 36vw);
+}
+
+.focus--work-empty .work-presence__orb .focus-orb {
+  width: min(260px, 44vw);
+}
+
+.work-presence__meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: rgba(233, 174, 96, 0.45);
+  font-size: 0.55rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.work-presence__brand {
+  font-family: var(--font-display);
+  color: rgba(242, 211, 171, 0.55);
+  letter-spacing: 0.28em;
+}
+
+.work-presence__state.is-listening,
+.work-presence__state.is-speaking,
+.work-presence__state.is-thinking {
+  color: var(--cyan);
+}
+
+.work-presence__rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--danger);
+  letter-spacing: 0.18em;
+}
+
+.work-presence__clock {
+  font-variant-numeric: tabular-nums;
+  color: rgba(242, 211, 171, 0.35);
+}
+
+.work-presence__stream {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 2.8rem;
+  text-align: center;
+  max-width: 42ch;
+}
+
+.work-presence__canvas {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 1120px;
+  margin: 28px auto 0;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.work-presence__empty {
+  margin: 12vh auto 0;
+  max-width: 34ch;
+  text-align: center;
+  color: rgba(233, 174, 96, 0.4);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+}
+
+.work-presence__panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(245px, 1fr));
+  gap: 12px;
+  padding-bottom: 24px;
 }
 
 .focus__atmosphere {

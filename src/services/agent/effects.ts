@@ -29,7 +29,7 @@ export function applyIntentEffects(
       op === 'upsertAgent'
     ) {
       hooks.setWorkMode?.(true);
-    } else if (op === 'dashboard') {
+    } else if (op === 'dashboard' || op === 'focus') {
       hooks.setWorkMode?.(false);
       hooks.setCaptureArmed?.(false);
     }

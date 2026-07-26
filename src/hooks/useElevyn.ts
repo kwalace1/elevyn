@@ -134,7 +134,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       // Don't yank the mic if Elevyn is mid-ack and about to open command mode.
       if (phaseRef.current === 'command' && stateRef.current === 'listening') return;
       startWakeListeningRef.current();
-    }, 220);
+    }, 120);
   }, []);
 
   const clearCommandDebounce = useCallback(() => {
@@ -168,20 +168,21 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       speakingReplyRef.current = trimmed;
       ttsRef.current.speak(trimmed, {
         onStart: () => {
-          // Barge-in: keep the mic open under speech so "stop" / "Elevyn…"
-          // cuts Elevyn off instantly. Skip one-word confirms ("Noted.") —
-          // too short to interrupt, and echo-prone.
+          // Keep the mic alive under speech so barge-in / follow-ups land.
+          // Short acks used to leave the mic dead until TTS finished.
           if (
-            trimmed.length >= 24 &&
-            phaseRef.current === 'wake' &&
             armedRef.current &&
-            brainOnlineRef.current
+            brainOnlineRef.current &&
+            (phaseRef.current === 'wake' || phaseRef.current === 'command')
           ) {
             window.setTimeout(() => {
-              if (stateRef.current === 'speaking' && phaseRef.current === 'wake') {
+              if (stateRef.current !== 'speaking') return;
+              if (phaseRef.current === 'command') {
+                startCommandListeningRef.current();
+              } else if (phaseRef.current === 'wake') {
                 startWakeListeningRef.current();
               }
-            }, 500);
+            }, trimmed.length < 24 ? 180 : 420);
           }
         },
         onEnd: () => {
@@ -514,10 +515,18 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           }
         }
 
-        // Elevyn asked a question — keep the mic open for the answer.
+        // Keep the conversation open after replies so follow-ups don't require
+        // re-saying the name — especially in work mode.
         const nextAwait = intent.awaiting ?? null;
         pendingAwaitRef.current = nextAwait;
-        const resume = nextAwait ? resumeConversationRef.current : resumeWakeSoon;
+        const keepTalking =
+          Boolean(nextAwait) ||
+          workModeRef.current ||
+          (intent.type === 'surface' &&
+            (intent.surface?.op === 'work' || intent.surface?.op === 'focus'));
+        const resume = keepTalking
+          ? resumeConversationRef.current
+          : resumeWakeSoon;
 
         // Meeting capture lines stay silent — visual confirm only, stay listening.
         if (silent || !reply.trim()) {
@@ -676,6 +685,13 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         startCommandListeningRef.current();
         armCommandTimeout();
       });
+      // Open the mic under the ack so the first command isn't lost.
+      window.setTimeout(() => {
+        if (phaseRef.current !== 'command') return;
+        if (processingRef.current) return;
+        startCommandListeningRef.current();
+        armCommandTimeout();
+      }, 200);
     },
     [
       armCommandTimeout,
@@ -754,14 +770,15 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         enterCommandMode(cmd || undefined);
       };
 
-      // Name + command: act as soon as we have a real remainder.
-      // Don't wait for Chrome's flaky "all final" signal.
-      if (remainder && (isFinal || remainder.trim().split(/\s+/).length >= 1)) {
-        // Tiny debounce so "Elevyn make…" can finish the next word.
+      // Name + command: wait for a stable remainder so Chrome interim
+      // fragments ("Elevyn make") don't truncate the real utterance.
+      if (remainder) {
+        const words = remainder.trim().split(/\s+/).filter(Boolean);
+        const stableEnough = isFinal || words.length >= 3;
         clearWakeCommit();
         wakeCommitRef.current = window.setTimeout(
           () => commitWake(remainder),
-          isFinal ? 80 : 320,
+          isFinal ? 280 : stableEnough ? 700 : 1100,
         );
         return;
       }
@@ -770,7 +787,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearWakeCommit();
       wakeCommitRef.current = window.setTimeout(
         () => commitWake(),
-        isFinal ? 100 : 520,
+        isFinal ? 180 : 650,
       );
     },
     [
@@ -785,13 +802,37 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const handleCommandResult = useCallback(
     (text: string, isFinal: boolean) => {
       if (phaseRef.current !== 'command') return;
-      if (stateRef.current === 'speaking' || stateRef.current === 'thinking') {
+      // Allow barge-in while Elevyn is speaking a reply.
+      if (stateRef.current === 'thinking') return;
+      if (stateRef.current === 'speaking') {
+        if (isEchoOfReply(text, speakingReplyRef.current)) return;
+        if (matchStopCommand(text)) {
+          clearCommandDebounce();
+          ttsRef.current.stop();
+          speakingReplyRef.current = '';
+          pendingAwaitRef.current = null;
+          setState('listening');
+          stateRef.current = 'listening';
+          return;
+        }
+        const { heard, remainder } = matchAddress(text, { leadingOnly: true });
+        if (!heard) return;
+        clearCommandDebounce();
+        ttsRef.current.stop();
+        speakingReplyRef.current = '';
+        const command = remainder.trim();
+        if (command) {
+          setTranscript(command);
+          void processUtterance(command);
+        } else {
+          setState('listening');
+          stateRef.current = 'listening';
+        }
         return;
       }
 
-      const { heard, remainder } = matchAddress(text, {
-        workMode: workModeRef.current,
-      });
+      // Command phase: only strip a leading name — never mid-utterance "eleven".
+      const { heard, remainder } = matchAddress(text, { leadingOnly: true });
       const command = (heard ? remainder : text).trim();
       if (!command) return;
 
@@ -811,9 +852,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         if (ready && phaseRef.current === 'command' && !processingRef.current) {
           void processUtterance(ready);
         }
-      }, isFinal ? 750 : 1100);
+      }, isFinal ? 900 : 1300);
     },
-    [armCommandTimeout, processUtterance],
+    [armCommandTimeout, clearCommandDebounce, processUtterance],
   );
 
   const startWakeListening = useCallback(() => {
@@ -843,7 +884,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           clearRestartTimer();
           restartTimerRef.current = window.setTimeout(() => {
             startWakeListeningRef.current();
-          }, 280);
+          }, 140);
         },
         onError: (err) => {
           if (err === 'not-allowed') {
@@ -874,7 +915,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           clearRestartTimer();
           restartTimerRef.current = window.setTimeout(() => {
             startCommandListeningRef.current();
-          }, 200);
+          }, 100);
         },
       },
       'command',
