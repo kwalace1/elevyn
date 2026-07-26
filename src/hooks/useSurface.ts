@@ -228,7 +228,7 @@ export function useSurface() {
   /** Text of on-screen panels for summarize / catch-up / model context. */
   const getContext = useCallback(() => {
     const parts = panels
-      .filter((p) => p.kind !== 'timer')
+      .filter((p) => p.kind !== 'timer' && p.kind !== 'agent')
       .map((p) => {
         const body = p.items?.length
           ? p.items
@@ -316,6 +316,34 @@ export function useSurface() {
           break;
         case 'cancelTimer':
           cancelTimer();
+          break;
+        case 'upsertAgent': {
+          setView((v) => (v === 'dashboard' ? 'work' : v));
+          const agentId = cmd.agentId || 'agent-active';
+          const steps = cmd.agentSteps ?? [];
+          setPanels((prev) => {
+            const existing = prev.find((p) => p.id === agentId && p.kind === 'agent');
+            const panel = {
+              id: agentId,
+              kind: 'agent' as const,
+              title: cmd.title?.trim() || 'Plan',
+              agentSteps: steps,
+              items: steps.map((s, i) => ({
+                id: `s${i}`,
+                text: s.label,
+                done: s.status === 'done',
+              })),
+              createdAt: existing?.createdAt ?? new Date().toISOString(),
+            };
+            if (existing) {
+              return prev.map((p) => (p.id === agentId ? panel : p));
+            }
+            return [panel, ...prev.filter((p) => p.kind !== 'agent')];
+          });
+          break;
+        }
+        case 'clearAgent':
+          setPanels((prev) => prev.filter((p) => p.kind !== 'agent'));
           break;
       }
     },

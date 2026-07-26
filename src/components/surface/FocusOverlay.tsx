@@ -39,8 +39,8 @@ const WORK_COMMANDS = [
   { phrase: 'add a task…', label: 'Task' },
   { phrase: 'start capture', label: 'Capture' },
   { phrase: 'set a timer…', label: 'Timer' },
-  { phrase: 'summarize', label: 'Recap' },
-  { phrase: 'copy that', label: 'Export' },
+  { phrase: 'wrap up and draft', label: 'Agency' },
+  { phrase: 'plan my afternoon', label: 'Plan' },
 ];
 
 const STATE_LABEL: Record<ElevynState, string> = {

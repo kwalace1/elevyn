@@ -65,6 +65,7 @@ export function PanelCard({
 }: PanelCardProps) {
   const isCapture = panel.kind === 'capture';
   const isTimer = panel.kind === 'timer';
+  const isAgent = panel.kind === 'agent';
 
   return (
     <motion.div
@@ -80,7 +81,13 @@ export function PanelCard({
           {isCapture && panel.armed ? (
             <span className="rec-pip" aria-hidden />
           ) : null}
-          {isCapture ? (panel.armed ? 'recording' : 'capture') : panel.kind}
+          {isCapture
+            ? panel.armed
+              ? 'recording'
+              : 'capture'
+            : isAgent
+              ? 'plan'
+              : panel.kind}
         </span>
         <button
           type="button"
@@ -100,6 +107,28 @@ export function PanelCard({
 
       {panel.text ? <p className="panel-card__text">{panel.text}</p> : null}
 
+      {isAgent && panel.agentSteps?.length ? (
+        <ol className="agent-steps">
+          {panel.agentSteps.map((step, i) => (
+            <li
+              key={`${step.label}-${i}`}
+              className={`agent-step agent-step--${step.status}`}
+            >
+              <span className="agent-step__mark" aria-hidden>
+                {step.status === 'done'
+                  ? '✓'
+                  : step.status === 'running'
+                    ? '●'
+                    : step.status === 'failed'
+                      ? '!'
+                      : String(i + 1)}
+              </span>
+              <span className="agent-step__label">{step.label}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+
       {isCapture ? (
         panel.items?.length ? (
           <ul className="panel-card__lines">
@@ -116,7 +145,7 @@ export function PanelCard({
         )
       ) : null}
 
-      {!isCapture && !isTimer && panel.items?.length ? (
+      {!isCapture && !isTimer && !isAgent && panel.items?.length ? (
         <ul className="panel-card__items">
           {panel.items.map((item) => (
             <li

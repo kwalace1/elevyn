@@ -6,10 +6,16 @@
  * MVP demo never dies — open Cursor should work even without a model loaded.
  */
 
-import type { CommandDefinition, InterpretedIntent } from '../../../src/types/index.js';
+import type {
+  AgentPlan,
+  AgentStep,
+  CommandDefinition,
+  InterpretedIntent,
+} from '../../../src/types/index.js';
 import type { AIProviderRegistry } from './registry.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { MemoryService } from '../memory/store.js';
+import { matchAgentPlan } from '../../../src/services/agent/plans.js';
 
 /** Kevin's timezone — Vercel functions run in UTC, so never trust server local time. */
 const TIME_ZONE = process.env.ELEVYN_TZ ?? 'America/New_York';
@@ -54,7 +60,11 @@ Valid surface ops:
 Just chatting or answering a question:
 {"type":"chat","reply":"<spoken answer>"}
 
-Prefer surface actions when he clearly wants something on screen. Keep replies brief and useful.`
+Multi-step plan when Kevin chains actions ("and then"), wraps a meeting and drafts a follow-up, or asks to plan his afternoon:
+{"type":"agent","reply":"<short spoken ack>","plan":{"title":"<name>","steps":[{"label":"<label>","utterance":"<optional>","surface":{"op":"<optional>"},"remember":"<optional>","copy":false}]}}
+Max 4 steps. Use utterance for wrap/summarize/draft/pin. Use surface for work/clear/timer/stopCapture.
+
+Prefer surface or agent actions when he clearly wants something done. Keep replies brief and useful.`
 
 export class ElevynBrain {
   constructor(
@@ -74,6 +84,16 @@ export class ElevynBrain {
 
     const local = this.matchLocalIntent(trimmed);
     if (local) return local;
+
+    // Multi-step agency before single async intents so "wrap and draft" chains.
+    const agent = matchAgentPlan(trimmed);
+    if (agent) {
+      return {
+        type: 'agent',
+        reply: agent.reply,
+        plan: agent.plan,
+      };
+    }
 
     // Memory + summarize need async work / context, so they run after the
     // fast synchronous matchers but before the model.
@@ -207,7 +227,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Tell me what is on your calendar, or ask what is next. Say "catch me up" anytime.',
+          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Chain requests with "and then", or say "wrap up the meeting and draft a follow-up", or "plan my afternoon". Say "catch me up" anytime.',
       };
     }
 
@@ -834,6 +854,16 @@ export class ElevynBrain {
             reply: parsed.reply || 'Certainly.',
           };
         }
+        if (parsed.type === 'agent' && parsed.plan?.steps?.length) {
+          const plan = normalizeAgentPlan(parsed.plan);
+          if (plan) {
+            return {
+              type: 'agent',
+              plan,
+              reply: parsed.reply || 'On it.',
+            };
+          }
+        }
         if (parsed.type === 'chat' && parsed.reply) {
           return { type: 'chat', reply: parsed.reply };
         }
@@ -872,6 +902,31 @@ export class ElevynBrain {
       reply: cleaned.slice(0, 280) || 'Understood.',
     };
   }
+}
+
+function normalizeAgentPlan(raw: AgentPlan): AgentPlan | null {
+  if (!raw || !Array.isArray(raw.steps) || !raw.steps.length) return null;
+  const steps: AgentStep[] = raw.steps
+    .slice(0, 4)
+    .map((s, i) => {
+      const label = String(s?.label ?? `Step ${i + 1}`).slice(0, 60);
+      const step: AgentStep = { label };
+      if (s.surface?.op) step.surface = s.surface;
+      if (typeof s.utterance === 'string' && s.utterance.trim()) {
+        step.utterance = s.utterance.trim().slice(0, 280);
+      }
+      if (typeof s.remember === 'string' && s.remember.trim()) {
+        step.remember = s.remember.trim().slice(0, 280);
+      }
+      if (s.copy === true) step.copy = true;
+      return step;
+    })
+    .filter((s) => s.surface || s.utterance || s.remember || s.copy);
+  if (!steps.length) return null;
+  return {
+    title: String(raw.title || 'Plan').slice(0, 60),
+    steps,
+  };
 }
 
 function extractOnScreen(context: string): string {

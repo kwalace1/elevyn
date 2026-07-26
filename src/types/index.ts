@@ -86,7 +86,9 @@ export type SurfaceOp =
   | 'stopCapture' // stop recording into the capture panel
   | 'appendCapture' // add a line to the capture panel
   | 'timer' // start a countdown timer panel
-  | 'cancelTimer'; // cancel any running timer
+  | 'cancelTimer' // cancel any running timer
+  | 'upsertAgent' // show / update multi-step plan progress
+  | 'clearAgent'; // remove agent progress panel
 
 export interface SurfaceCommand {
   op: SurfaceOp;
@@ -95,9 +97,13 @@ export interface SurfaceCommand {
   items?: string[];
   /** For "timer": countdown length in seconds. */
   seconds?: number;
+  /** For upsertAgent: live step statuses. */
+  agentSteps?: AgentStepStatus[];
+  /** For upsertAgent: stable panel id. */
+  agentId?: string;
 }
 
-export type SurfacePanelKind = 'note' | 'task' | 'list' | 'capture' | 'timer';
+export type SurfacePanelKind = 'note' | 'task' | 'list' | 'capture' | 'timer' | 'agent';
 
 export interface SurfacePanel {
   id: string;
@@ -111,13 +117,39 @@ export interface SurfacePanel {
   /** Timer: absolute end time (ISO) and original length. */
   endsAt?: string;
   seconds?: number;
+  /** Agent plan progress (kind === 'agent'). */
+  agentSteps?: AgentStepStatus[];
+}
+
+/** One step in a multi-step Elevyn plan. */
+export interface AgentStep {
+  label: string;
+  /** Deterministic surface action. */
+  surface?: SurfaceCommand;
+  /** Ask the brain again (wrap meeting, draft, summarize, …). */
+  utterance?: string;
+  /** Store in durable + session memory. */
+  remember?: string;
+  /** Copy current on-screen context to clipboard. */
+  copy?: boolean;
+}
+
+export interface AgentStepStatus extends AgentStep {
+  status: 'pending' | 'running' | 'done' | 'failed';
+}
+
+export interface AgentPlan {
+  title: string;
+  steps: AgentStep[];
 }
 
 export interface InterpretedIntent {
-  type: 'command' | 'chat' | 'surface';
+  type: 'command' | 'chat' | 'surface' | 'agent';
   commandId?: string;
   args?: Record<string, unknown>;
   surface?: SurfaceCommand;
+  /** Multi-step plan — client runs steps and shows progress on glass. */
+  plan?: AgentPlan;
   reply: string;
   /**
    * Elevyn asked a question and is waiting for the answer as the next

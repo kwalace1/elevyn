@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ElevynState, SurfaceCommand, SurfacePanel } from '../types';
+import type {
+  AgentPlan,
+  AgentStepStatus,
+  ElevynState,
+  SurfaceCommand,
+  SurfacePanel,
+} from '../types';
 import { elevynApi } from '../services/api/client';
 import { BrowserSpeechRecognition } from '../services/voice/recognition';
 import { ElevynSpeech } from '../services/voice/elevynSpeech';
 import { SessionMemory } from '../services/session/memory';
 import { DurableMemory } from '../services/memory/durable';
+import { applyIntentEffects } from '../services/agent/effects';
 import {
   buildPresenceSnapshot,
   buildWakeBrief,
@@ -185,6 +192,172 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     [],
   );
 
+  const speakAsync = useCallback(
+    (text: string) =>
+      new Promise<void>((resolve) => {
+        speak(text, () => resolve());
+      }),
+    [speak],
+  );
+
+  const effectHooks = useCallback(
+    (): Parameters<typeof applyIntentEffects>[1] => ({
+      onSurface: (cmd) => onSurfaceRef.current?.(cmd),
+      setWorkMode: (on) => {
+        workModeRef.current = on;
+      },
+      setCaptureArmed: (on) => {
+        captureArmedRef.current = on;
+      },
+    }),
+    [],
+  );
+
+  const publishAgentPanel = useCallback(
+    (title: string, steps: AgentStepStatus[], agentId: string) => {
+      onSurfaceRef.current?.({
+        op: 'upsertAgent',
+        title,
+        agentId,
+        agentSteps: steps,
+      });
+      workModeRef.current = true;
+    },
+    [],
+  );
+
+  const runAgentPlan = useCallback(
+    async (plan: AgentPlan, depth = 0): Promise<string> => {
+      if (depth > 2) return 'Plan stopped — too many nested steps.';
+      const agentId = `agent-${Date.now().toString(36)}`;
+      let steps: AgentStepStatus[] = plan.steps.map((s) => ({
+        ...s,
+        status: 'pending' as const,
+      }));
+      publishAgentPanel(plan.title, steps, agentId);
+
+      let lastUseful = '';
+      for (let i = 0; i < steps.length; i++) {
+        steps = steps.map((s, idx) => ({
+          ...s,
+          status:
+            idx === i ? 'running' : idx < i ? s.status : 'pending',
+        }));
+        publishAgentPanel(plan.title, steps, agentId);
+
+        const step = plan.steps[i];
+        try {
+          if (step.surface) {
+            onSurfaceRef.current?.(step.surface);
+            if (step.surface.op === 'work' || step.surface.op === 'createNote') {
+              workModeRef.current = true;
+            }
+            if (step.surface.op === 'stopCapture') {
+              captureArmedRef.current = false;
+            }
+          }
+
+          if (step.remember) {
+            sessionRef.current.addFact(step.remember);
+            durableRef.current.addFact(step.remember);
+            setMemoryEpoch((n) => n + 1);
+          }
+
+          if (step.copy) {
+            const ctx = getContextRef.current?.();
+            if (ctx?.trim()) {
+              try {
+                await navigator.clipboard.writeText(ctx);
+              } catch {
+                // ignore
+              }
+            }
+          }
+
+          if (step.utterance?.trim()) {
+            const panelContext = getContextRef.current?.();
+            const sessionBlock = sessionRef.current.toContextBlock();
+            const durableBlock = durableRef.current.toContextBlock();
+            const contextParts = [
+              durableBlock,
+              sessionBlock,
+              panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
+            ].filter(Boolean);
+            const context = contextParts.length
+              ? contextParts.join('\n\n').slice(0, 7500)
+              : undefined;
+
+            const { intent, execution } = await elevynApi.interpret(
+              step.utterance.trim(),
+              context,
+            );
+
+            if (intent.type === 'agent' && intent.plan) {
+              await runAgentPlan(intent.plan, depth + 1);
+            } else {
+              applyIntentEffects(intent, effectHooks());
+              const fact = intent.args?.sessionFact;
+              if (typeof fact === 'string' && fact.trim()) {
+                sessionRef.current.addFact(fact);
+              }
+              const durableFact = intent.args?.durableFact;
+              if (typeof durableFact === 'string' && durableFact.trim()) {
+                durableRef.current.addFact(durableFact);
+                setMemoryEpoch((n) => n + 1);
+              }
+              const scheduleUtterance = intent.args?.scheduleUtterance;
+              if (typeof scheduleUtterance === 'string') {
+                const parsed = parseSpokenAgenda(scheduleUtterance);
+                if (parsed) {
+                  durableRef.current.addEvent({
+                    title: parsed.title,
+                    start: parsed.startIso,
+                    end: parsed.endIso,
+                    source: 'voice',
+                  });
+                  setMemoryEpoch((n) => n + 1);
+                }
+              }
+              const clipboard = intent.args?.clipboard;
+              if (typeof clipboard === 'string' && clipboard.trim()) {
+                try {
+                  await navigator.clipboard.writeText(clipboard);
+                } catch {
+                  // ignore
+                }
+              }
+              const stepReply =
+                execution && !execution.success
+                  ? execution.message
+                  : intent.reply;
+              if (stepReply?.trim()) lastUseful = stepReply.trim();
+            }
+          }
+
+          steps = steps.map((s, idx) =>
+            idx === i ? { ...s, status: 'done' } : s,
+          );
+          publishAgentPanel(plan.title, steps, agentId);
+          // Brief beat so the glass update is readable.
+          await new Promise((r) => window.setTimeout(r, 280));
+        } catch {
+          steps = steps.map((s, idx) =>
+            idx === i ? { ...s, status: 'failed' } : s,
+          );
+          publishAgentPanel(plan.title, steps, agentId);
+          return `I hit a snag on: ${step.label}.`;
+        }
+      }
+
+      const doneCount = steps.filter((s) => s.status === 'done').length;
+      if (lastUseful) {
+        return `Done. ${lastUseful}`;
+      }
+      return `Done. ${doneCount} step${doneCount === 1 ? '' : 's'} complete.`;
+    },
+    [effectHooks, publishAgentPanel],
+  );
+
   const processUtterance = useCallback(
     async (utterance: string) => {
       if (processingRef.current) return;
@@ -286,47 +459,24 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           }
         }
 
+        // Multi-step agency: ack → run plan on glass → final summary.
+        if (intent.type === 'agent' && intent.plan?.steps?.length) {
+          setTranscript('');
+          const opening = intent.reply.trim() || 'On it.';
+          sessionRef.current.addTurn('assistant', opening);
+          await speakAsync(opening);
+          const summary = await runAgentPlan(intent.plan);
+          sessionRef.current.addTurn('assistant', summary);
+          await speakAsync(summary);
+          resumeWakeSoon();
+          return;
+        }
+
         // Flip the surface immediately so work mode never looks "stuck loading"
         // while speech is synthesizing.
+        applyIntentEffects(intent, effectHooks());
         if (intent.type === 'surface' && intent.surface) {
-          onSurfaceRef.current?.(intent.surface);
           setTranscript('');
-
-          const op = intent.surface.op;
-          if (
-            op === 'work' ||
-            op === 'createNote' ||
-            op === 'createTask' ||
-            op === 'createList' ||
-            op === 'startCapture' ||
-            op === 'appendCapture' ||
-            op === 'timer'
-          ) {
-            workModeRef.current = true;
-          } else if (op === 'dashboard') {
-            workModeRef.current = false;
-            captureArmedRef.current = false;
-          }
-
-          if (op === 'startCapture' || op === 'appendCapture') {
-            captureArmedRef.current = true;
-          } else if (op === 'stopCapture' || op === 'clear') {
-            captureArmedRef.current = false;
-          }
-        }
-
-        // Meeting wrap-up: stop capture + materialize action items as tasks.
-        if (intent.args?.stopCapture === true) {
-          onSurfaceRef.current?.({ op: 'stopCapture' });
-          captureArmedRef.current = false;
-        }
-        const actionItems = intent.args?.actionItems;
-        if (Array.isArray(actionItems)) {
-          for (const item of actionItems) {
-            if (typeof item === 'string' && item.trim()) {
-              onSurfaceRef.current?.({ op: 'createTask', text: item.trim() });
-            }
-          }
         }
 
         const reply =
@@ -391,7 +541,16 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         processingRef.current = false;
       }
     },
-    [clearCommandDebounce, clearCommandTimeout, clearWakeCommit, resumeWakeSoon, speak],
+    [
+      clearCommandDebounce,
+      clearCommandTimeout,
+      clearWakeCommit,
+      effectHooks,
+      resumeWakeSoon,
+      runAgentPlan,
+      speak,
+      speakAsync,
+    ],
   );
 
   const armCommandTimeout = useCallback(() => {
