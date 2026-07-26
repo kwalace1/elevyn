@@ -227,15 +227,15 @@ export function isEchoOfReply(heard: string, reply: string): boolean {
   ]);
   // One-word barge-ins that are not the name: allow through.
   if (heardWords.length === 1 && STOP.has(heardWords[0])) return false;
-  // Bare name alone during speech is usually echo of "Elevyn…" in the reply
-  // or the wake cue — require a real follow-up command to interrupt.
-  if (heardWords.length === 1 && isElevynNameToken(heardWords[0])) return true;
+  // Bare name / "hey Elevyn" during/after speech is usually the user
+  // re-addressing — never treat as echo.
+  if (heardWords.length === 1 && isElevynNameToken(heardWords[0])) return false;
   if (
     heardWords.length === 2 &&
     GREETING_WORDS.has(heardWords[0]) &&
     isElevynNameToken(heardWords[1])
   ) {
-    return true;
+    return false;
   }
 
   const replyWords = words(reply);

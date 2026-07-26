@@ -16,6 +16,8 @@ export interface SpeechRecognitionHandlers {
 
 export interface SpeechRecognitionService {
   readonly supported: boolean;
+  /** True while a recognition session is live. */
+  readonly active: boolean;
   start(handlers: SpeechRecognitionHandlers, mode?: RecognitionMode): void;
   stop(): void;
   abort(): void;
@@ -80,6 +82,10 @@ export class BrowserSpeechRecognition implements SpeechRecognitionService {
 
   constructor() {
     this.supported = Boolean(getSpeechRecognitionCtor());
+  }
+
+  get active(): boolean {
+    return this.recognition !== null;
   }
 
   start(

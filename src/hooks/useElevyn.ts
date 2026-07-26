@@ -177,21 +177,35 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       stateRef.current = 'speaking';
       speakingReplyRef.current = trimmed;
       lastSpokenRef.current = trimmed;
-      ttsRef.current.speak(trimmed, {
-        onEnd: () => {
-          // Hold echo guard a beat after audio stops (speaker / room lag).
-          echoGuardUntilRef.current = Date.now() + 900;
-          speakingReplyRef.current = trimmed;
+
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        echoGuardUntilRef.current = Date.now() + 600;
+        if (speakingReplyRef.current === trimmed) {
+          speakingReplyRef.current = '';
+        }
+        if (stateRef.current === 'speaking') {
           setState('idle');
           stateRef.current = 'idle';
-          window.setTimeout(() => {
-            if (speakingReplyRef.current === trimmed) {
-              speakingReplyRef.current = '';
-            }
-            onDone?.();
-          }, 450);
+        }
+        onDone?.();
+      };
+
+      ttsRef.current.speak(trimmed, {
+        onEnd: () => {
+          // Brief settle so speaker bleed dies, then always resume listening.
+          window.setTimeout(finish, 350);
         },
       });
+
+      // Hard safety: if TTS onEnd is lost, never stay stuck "speaking" with a dead mic.
+      window.setTimeout(() => {
+        if (stateRef.current === 'speaking' && speakingReplyRef.current === trimmed) {
+          finish();
+        }
+      }, Math.min(20_000, 2500 + trimmed.length * 80));
     },
     [clearRestartTimer],
   );
@@ -599,6 +613,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     window.setTimeout(() => {
       if (!armedRef.current || !brainOnlineRef.current) return;
       if (processingRef.current) return;
+      // Force out of a stuck speaking/thinking state so the mic can reopen.
+      if (stateRef.current === 'speaking' || stateRef.current === 'thinking') {
+        setState('idle');
+        stateRef.current = 'idle';
+        speakingReplyRef.current = '';
+      }
       startCommandListeningRef.current();
       armCommandTimeout();
     }, 120);
@@ -779,19 +799,41 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       if (stateRef.current === 'thinking' || stateRef.current === 'speaking') {
         return;
       }
-      // Drop speaker bleed right after Elevyn finishes talking.
+      // Drop speaker bleed right after Elevyn finishes talking — but never
+      // drop a bare wake address ("Eleven" / "hey Elevyn").
+      const addressed = matchAddress(text, { leadingOnly: true });
       if (
         Date.now() < echoGuardUntilRef.current &&
+        !addressed.heard &&
         isEchoOfReply(text, lastSpokenRef.current || speakingReplyRef.current)
       ) {
         return;
       }
 
       // Command phase: only strip a leading name — never mid-utterance "eleven".
-      const { heard, remainder } = matchAddress(text, { leadingOnly: true });
-      const command = (heard ? remainder : text).trim();
+      const command = (addressed.heard ? addressed.remainder : text).trim();
+
+      // Bare "Elevyn" / "Eleven" while already in conversation — soft re-ack.
+      if (addressed.heard && !command) {
+        armCommandTimeout();
+        setTranscript('');
+        if (isFinal) {
+          speak('Yes?', () => {
+            if (phaseRef.current !== 'command') return;
+            startCommandListeningRef.current();
+            armCommandTimeout();
+          });
+        }
+        return;
+      }
+
       if (!command) return;
-      if (isEchoOfReply(command, lastSpokenRef.current)) return;
+      if (
+        Date.now() < echoGuardUntilRef.current &&
+        isEchoOfReply(command, lastSpokenRef.current)
+      ) {
+        return;
+      }
 
       setTranscript(command);
       pendingCommandRef.current = command;
@@ -812,7 +854,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         }
       }, isFinal ? 900 : 1300);
     },
-    [armCommandTimeout, clearCommandDebounce, processUtterance],
+    [armCommandTimeout, clearCommandDebounce, processUtterance, speak],
   );
 
   const startWakeListening = useCallback(() => {
@@ -820,7 +862,6 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     if (!armedRef.current || !brainOnlineRef.current) return;
     if (processingRef.current) return;
     if (stateRef.current === 'thinking' || stateRef.current === 'speaking') return;
-    if (phaseRef.current === 'command' && stateRef.current === 'listening') return;
     syncSurfaceFlags();
 
     clearRestartTimer();
@@ -849,6 +890,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           if (err === 'not-allowed') {
             setError('Microphone permission is required for “Hey Elevyn”.');
             setArmed(false);
+          } else {
+            // Network / service blips — retry wake shortly.
+            clearRestartTimer();
+            restartTimerRef.current = window.setTimeout(() => {
+              if (phaseRef.current === 'wake') startWakeListeningRef.current();
+            }, 400);
           }
         },
       },
@@ -858,8 +905,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
 
   const startCommandListening = useCallback(() => {
     if (!recognitionRef.current.supported) return;
-    if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return;
     if (processingRef.current) return;
+    if (stateRef.current === 'speaking' || stateRef.current === 'thinking') {
+      // Don't permanently skip — clear stuck speaking so the next watchdog can open the mic.
+      return;
+    }
     clearRestartTimer();
     phaseRef.current = 'command';
     setState('listening');
@@ -878,6 +928,19 @@ export function useElevyn(hooks: ElevynHooks = {}) {
             startCommandListeningRef.current();
           }, 100);
         },
+        onError: (err) => {
+          if (err === 'not-allowed') {
+            setError('Microphone permission is required for “Hey Elevyn”.');
+            setArmed(false);
+            return;
+          }
+          clearRestartTimer();
+          restartTimerRef.current = window.setTimeout(() => {
+            if (phaseRef.current === 'command') {
+              startCommandListeningRef.current();
+            }
+          }, 400);
+        },
       },
       'command',
     );
@@ -885,6 +948,22 @@ export function useElevyn(hooks: ElevynHooks = {}) {
 
   startWakeListeningRef.current = startWakeListening;
   startCommandListeningRef.current = startCommandListening;
+
+  // Mic watchdog — if Chrome drops recognition after a reply, reopen it.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (!armedRef.current || !brainOnlineRef.current) return;
+      if (processingRef.current) return;
+      if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return;
+      if (recognitionRef.current.active) return;
+      if (phaseRef.current === 'command' || holdConversationRef.current) {
+        startCommandListeningRef.current();
+      } else {
+        startWakeListeningRef.current();
+      }
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
