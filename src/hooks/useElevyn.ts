@@ -75,6 +75,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   // slot it's waiting to fill so the next utterance answers it directly.
   const pendingAwaitRef = useRef<'note' | 'task' | 'list' | 'timer' | null>(null);
   const resumeConversationRef = useRef<() => void>(() => {});
+  // After a reply, keep command-phase listening open briefly so follow-ups
+  // don't require re-saying "Elevyn" / "Eleven".
+  const holdConversationRef = useRef(false);
   // In work mode Elevyn listens for its name (Elevyn / Eleven) mid-utterance.
   // While capture is armed, "note that…" also fires without the name.
   const workModeRef = useRef(false);
@@ -169,21 +172,15 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       ttsRef.current.speak(trimmed, {
         onStart: () => {
           // Keep the mic alive under speech so barge-in / follow-ups land.
-          // Short acks used to leave the mic dead until TTS finished.
-          if (
-            armedRef.current &&
-            brainOnlineRef.current &&
-            (phaseRef.current === 'wake' || phaseRef.current === 'command')
-          ) {
-            window.setTimeout(() => {
-              if (stateRef.current !== 'speaking') return;
-              if (phaseRef.current === 'command') {
-                startCommandListeningRef.current();
-              } else if (phaseRef.current === 'wake') {
-                startWakeListeningRef.current();
-              }
-            }, trimmed.length < 24 ? 180 : 420);
-          }
+          if (!armedRef.current || !brainOnlineRef.current) return;
+          window.setTimeout(() => {
+            if (stateRef.current !== 'speaking') return;
+            if (holdConversationRef.current || phaseRef.current === 'command') {
+              startCommandListeningRef.current();
+            } else if (phaseRef.current === 'wake') {
+              startWakeListeningRef.current();
+            }
+          }, trimmed.length < 24 ? 180 : 420);
         },
         onEnd: () => {
           speakingReplyRef.current = '';
@@ -409,7 +406,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearCommandDebounce();
       clearWakeCommit();
       recognitionRef.current.abort();
-      phaseRef.current = 'wake';
+      // Stay in command phase while thinking if we're holding a conversation,
+      // so the post-reply mic comes back as follow-up listening — not wake.
+      if (!holdConversationRef.current) {
+        phaseRef.current = 'wake';
+      }
       setState('thinking');
       stateRef.current = 'thinking';
       setError(null);
@@ -515,18 +516,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           }
         }
 
-        // Keep the conversation open after replies so follow-ups don't require
-        // re-saying the name — especially in work mode.
+        // Always hold an open conversation window after a reply so follow-ups
+        // don't require re-addressing Elevyn for ~10s.
         const nextAwait = intent.awaiting ?? null;
         pendingAwaitRef.current = nextAwait;
-        const keepTalking =
-          Boolean(nextAwait) ||
-          workModeRef.current ||
-          (intent.type === 'surface' &&
-            (intent.surface?.op === 'work' || intent.surface?.op === 'focus'));
-        const resume = keepTalking
-          ? resumeConversationRef.current
-          : resumeWakeSoon;
+        holdConversationRef.current = true;
+        const resume = () => resumeConversationRef.current();
 
         // Meeting capture lines stay silent — visual confirm only, stay listening.
         if (silent || !reply.trim()) {
@@ -544,10 +539,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
             if (stateRef.current === 'speaking' || stateRef.current === 'thinking') {
               return;
             }
-            if (stateRef.current === 'listening') return;
-            if (nextAwait && pendingAwaitRef.current) {
+            if (stateRef.current === 'listening' && phaseRef.current === 'command') {
+              return;
+            }
+            if (holdConversationRef.current || pendingAwaitRef.current) {
               resumeConversationRef.current();
-            } else if (phaseRef.current === 'wake') {
+            } else {
               startWakeListeningRef.current();
             }
           }, Math.min(6_000, 900 + reply.length * 45));
@@ -573,10 +570,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     ],
   );
 
+  /** How long to keep accepting follow-ups without re-saying the name. */
+  const CONVERSATION_HOLD_MS = 10_000;
+
   const armCommandTimeout = useCallback(() => {
     clearCommandTimeout();
     commandTimeoutRef.current = window.setTimeout(() => {
       if (phaseRef.current !== 'command' || processingRef.current) return;
+      holdConversationRef.current = false;
       phaseRef.current = 'wake';
       setState('idle');
       stateRef.current = 'idle';
@@ -585,18 +586,19 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearCommandDebounce();
       recognitionRef.current.abort();
       resumeWakeSoon();
-    }, 18_000);
+    }, CONVERSATION_HOLD_MS);
   }, [clearCommandDebounce, clearCommandTimeout, resumeWakeSoon]);
 
   // Keep the mic open (command phase) so Kevin can answer a follow-up
-  // question without re-saying "Elevyn".
+  // without re-saying "Elevyn" / "Eleven".
   const resumeConversation = useCallback(() => {
+    holdConversationRef.current = true;
     window.setTimeout(() => {
       if (!armedRef.current || !brainOnlineRef.current) return;
       if (processingRef.current) return;
       startCommandListeningRef.current();
       armCommandTimeout();
-    }, 150);
+    }, 120);
   }, [armCommandTimeout]);
   resumeConversationRef.current = resumeConversation;
 

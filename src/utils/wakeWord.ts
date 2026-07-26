@@ -7,9 +7,21 @@
  */
 
 /** Common wake greetings STT may attach before the name. */
-const GREETING_WORDS = new Set(['hey', 'hi', 'ok', 'okay', 'yo', 'hello']);
+const GREETING_WORDS = new Set(['hey', 'hi', 'ok', 'okay', 'yo', 'hello', 'hai']);
+/** Filler STT often prepends before a wake. */
+const FILLER_WORDS = new Set([
+  'um',
+  'uh',
+  'uhm',
+  'erm',
+  'so',
+  'well',
+  'and',
+  'like',
+  'please',
+]);
 const EXACT_NAME =
-  /^(?:elevyn|eleven|elevan|elevin|elevon|elevation|evelyn|ellen|elevynn|elevenn|elevene|elevum|eleva|11)$/i;
+  /^(?:elevyn|eleven|elevan|elevin|elevon|elevation|evelyn|ellen|elevynn|elevenn|elevene|elevens|elevum|eleva|elven|leven|11)$/i;
 
 /** Canonical forms for edit-distance checks (avoid short/ambiguous targets). */
 const FUZZY_TARGETS = [
@@ -22,6 +34,8 @@ const FUZZY_TARGETS = [
   'elevation',
   'elevynn',
   'elevenn',
+  'elevens',
+  'elven',
 ];
 
 function levenshtein(a: string, b: string): number {
@@ -110,12 +124,17 @@ export function matchWakeWord(transcript: string): {
   const before = words.slice(0, span.start);
   const after = words.slice(span.end).join(' ').trim();
 
+  // Strip leading fillers: "um hey Elevyn…" / "so Elevyn…"
+  let i = 0;
+  while (i < before.length && FILLER_WORDS.has(before[i])) i += 1;
+  const lead = before.slice(i);
+
   // "Hey Elevyn …" / "Okay Elevyn …"
-  if (before.length === 1 && GREETING_WORDS.has(before[0])) {
+  if (lead.length === 1 && GREETING_WORDS.has(lead[0])) {
     return { heard: true, remainder: after };
   }
-  // Bare name at the start: "Elevyn open notes"
-  if (before.length === 0) {
+  // Bare name at the start (after optional fillers): "Elevyn open notes"
+  if (lead.length === 0) {
     return { heard: true, remainder: after };
   }
 
