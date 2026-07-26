@@ -198,19 +198,54 @@ export function matchStopCommand(transcript: string): boolean {
 }
 
 /**
- * Echo guard: Chrome's mic sometimes hears Elevyn's own TTS. If nearly every
- * word the mic heard is already in the reply being spoken, it's an echo —
- * not Kevin interrupting.
+ * Echo guard: Chrome's mic often hears Elevyn's own TTS.
+ * Treat as echo when heard content is largely already in the reply.
  */
 export function isEchoOfReply(heard: string, reply: string): boolean {
-  const words = (s: string) => normalizeTranscript(s).split(' ').filter(Boolean);
+  const words = (s: string) =>
+    normalizeTranscript(s)
+      .split(' ')
+      .filter(Boolean)
+      .filter((w) => w.length > 1 || w === 'i' || w === 'a');
   const heardWords = words(heard);
   if (!heardWords.length) return true;
-  // Short barge-ins ("stop", "wait", "Elevyn") must never look like echoes.
-  if (heardWords.length <= 2) return false;
-  const replySet = new Set(words(reply));
+  if (!reply.trim()) return false;
+
+  const replyNorm = normalizeTranscript(reply);
+  const heardNorm = normalizeTranscript(heard);
+  // Direct containment — classic speaker bleed.
+  if (heardNorm.length >= 4 && replyNorm.includes(heardNorm)) return true;
+  if (replyNorm.length >= 4 && heardNorm.includes(replyNorm)) return true;
+
+  const STOP = new Set([
+    'stop',
+    'wait',
+    'quiet',
+    'enough',
+    'pause',
+    'cancel',
+  ]);
+  // One-word barge-ins that are not the name: allow through.
+  if (heardWords.length === 1 && STOP.has(heardWords[0])) return false;
+  // Bare name alone during speech is usually echo of "Elevyn…" in the reply
+  // or the wake cue — require a real follow-up command to interrupt.
+  if (heardWords.length === 1 && isElevynNameToken(heardWords[0])) return true;
+  if (
+    heardWords.length === 2 &&
+    GREETING_WORDS.has(heardWords[0]) &&
+    isElevynNameToken(heardWords[1])
+  ) {
+    return true;
+  }
+
+  const replyWords = words(reply);
+  if (!replyWords.length) return false;
+  const replySet = new Set(replyWords);
   const hits = heardWords.filter((w) => replySet.has(w)).length;
-  return hits / heardWords.length >= 0.75;
+  const ratio = hits / heardWords.length;
+  // Short fragments of the reply are almost always bleed-through.
+  if (heardWords.length <= 4) return ratio >= 0.5;
+  return ratio >= 0.55;
 }
 
 /**

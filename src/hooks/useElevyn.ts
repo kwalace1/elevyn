@@ -22,7 +22,6 @@ import {
   isEchoOfReply,
   matchAddress,
   matchCaptureShortcut,
-  matchStopCommand,
 } from '../utils/wakeWord';
 
 type ListenPhase = 'wake' | 'command';
@@ -85,6 +84,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   // Reply currently being spoken — used to tell Kevin's interruption apart
   // from the mic hearing Elevyn's own voice.
   const speakingReplyRef = useRef('');
+  // Keep filtering echoes briefly after TTS ends (room / speaker bleed).
+  const echoGuardUntilRef = useRef(0);
+  const lastSpokenRef = useRef('');
   // Throttle situational wake briefs so Elevyn does not monologue every "Elevyn".
   const lastBriefAtRef = useRef(0);
 
@@ -165,32 +167,33 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         return;
       }
 
+      // Mute the mic while Elevyn talks — open mics during TTS hear Sonia
+      // and treat the reply as a user utterance.
+      clearRestartTimer();
+      recognitionRef.current.abort();
+
       setResponse(trimmed);
       setState('speaking');
       stateRef.current = 'speaking';
       speakingReplyRef.current = trimmed;
+      lastSpokenRef.current = trimmed;
       ttsRef.current.speak(trimmed, {
-        onStart: () => {
-          // Keep the mic alive under speech so barge-in / follow-ups land.
-          if (!armedRef.current || !brainOnlineRef.current) return;
-          window.setTimeout(() => {
-            if (stateRef.current !== 'speaking') return;
-            if (holdConversationRef.current || phaseRef.current === 'command') {
-              startCommandListeningRef.current();
-            } else if (phaseRef.current === 'wake') {
-              startWakeListeningRef.current();
-            }
-          }, trimmed.length < 24 ? 180 : 420);
-        },
         onEnd: () => {
-          speakingReplyRef.current = '';
+          // Hold echo guard a beat after audio stops (speaker / room lag).
+          echoGuardUntilRef.current = Date.now() + 900;
+          speakingReplyRef.current = trimmed;
           setState('idle');
           stateRef.current = 'idle';
-          onDone?.();
+          window.setTimeout(() => {
+            if (speakingReplyRef.current === trimmed) {
+              speakingReplyRef.current = '';
+            }
+            onDone?.();
+          }, 450);
         },
       });
     },
-    [],
+    [clearRestartTimer],
   );
 
   const speakAsync = useCallback(
@@ -687,13 +690,6 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         startCommandListeningRef.current();
         armCommandTimeout();
       });
-      // Open the mic under the ack so the first command isn't lost.
-      window.setTimeout(() => {
-        if (phaseRef.current !== 'command') return;
-        if (processingRef.current) return;
-        startCommandListeningRef.current();
-        armCommandTimeout();
-      }, 200);
     },
     [
       armCommandTimeout,
@@ -712,39 +708,16 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     (text: string, isFinal: boolean) => {
       if (phaseRef.current !== 'wake') return;
       if (stateRef.current === 'thinking' || processingRef.current) return;
-      syncSurfaceFlags();
-
-      // Barge-in: interrupt Elevyn while it's speaking.
-      if (stateRef.current === 'speaking') {
-        // The mic sometimes hears Elevyn's own voice — never self-interrupt.
-        if (isEchoOfReply(text, speakingReplyRef.current)) return;
-
-        // "Stop" / "wait" / "Elevyn, enough" → go quiet immediately, no ack.
-        if (matchStopCommand(text)) {
-          clearWakeCommit();
-          ttsRef.current.stop();
-          speakingReplyRef.current = '';
-          pendingAwaitRef.current = null;
-          setState('idle');
-          stateRef.current = 'idle';
-          setResponse('');
-          recognitionRef.current.abort();
-          resumeWakeSoon();
-          return;
-        }
-
-        // Name (anywhere, any mode) → cut speech and take the new command.
-        const { heard, remainder } = matchAddress(text, { workMode: true });
-        if (!heard || (!isFinal && !remainder)) return;
-        clearWakeCommit();
-        ttsRef.current.stop();
-        speakingReplyRef.current = '';
-        setState('idle');
-        stateRef.current = 'idle';
-        recognitionRef.current.abort();
-        enterCommandMode(remainder || undefined);
+      // Never process mic input while Elevyn is talking.
+      if (stateRef.current === 'speaking') return;
+      // Drop post-TTS echo tails.
+      if (
+        Date.now() < echoGuardUntilRef.current &&
+        isEchoOfReply(text, lastSpokenRef.current || speakingReplyRef.current)
+      ) {
         return;
       }
+      syncSurfaceFlags();
 
       const { heard, remainder } = matchAddress(text, {
         workMode: workModeRef.current,
@@ -796,7 +769,6 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearWakeCommit,
       enterCommandMode,
       processUtterance,
-      resumeWakeSoon,
       syncSurfaceFlags,
     ],
   );
@@ -804,32 +776,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const handleCommandResult = useCallback(
     (text: string, isFinal: boolean) => {
       if (phaseRef.current !== 'command') return;
-      // Allow barge-in while Elevyn is speaking a reply.
-      if (stateRef.current === 'thinking') return;
-      if (stateRef.current === 'speaking') {
-        if (isEchoOfReply(text, speakingReplyRef.current)) return;
-        if (matchStopCommand(text)) {
-          clearCommandDebounce();
-          ttsRef.current.stop();
-          speakingReplyRef.current = '';
-          pendingAwaitRef.current = null;
-          setState('listening');
-          stateRef.current = 'listening';
-          return;
-        }
-        const { heard, remainder } = matchAddress(text, { leadingOnly: true });
-        if (!heard) return;
-        clearCommandDebounce();
-        ttsRef.current.stop();
-        speakingReplyRef.current = '';
-        const command = remainder.trim();
-        if (command) {
-          setTranscript(command);
-          void processUtterance(command);
-        } else {
-          setState('listening');
-          stateRef.current = 'listening';
-        }
+      if (stateRef.current === 'thinking' || stateRef.current === 'speaking') {
+        return;
+      }
+      // Drop speaker bleed right after Elevyn finishes talking.
+      if (
+        Date.now() < echoGuardUntilRef.current &&
+        isEchoOfReply(text, lastSpokenRef.current || speakingReplyRef.current)
+      ) {
         return;
       }
 
@@ -837,6 +791,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       const { heard, remainder } = matchAddress(text, { leadingOnly: true });
       const command = (heard ? remainder : text).trim();
       if (!command) return;
+      if (isEchoOfReply(command, lastSpokenRef.current)) return;
 
       setTranscript(command);
       pendingCommandRef.current = command;
@@ -852,6 +807,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         pendingCommandRef.current = '';
         commandDebounceRef.current = null;
         if (ready && phaseRef.current === 'command' && !processingRef.current) {
+          if (isEchoOfReply(ready, lastSpokenRef.current)) return;
           void processUtterance(ready);
         }
       }, isFinal ? 900 : 1300);
@@ -863,14 +819,13 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     if (!recognitionRef.current.supported) return;
     if (!armedRef.current || !brainOnlineRef.current) return;
     if (processingRef.current) return;
-    if (stateRef.current === 'thinking') return;
+    if (stateRef.current === 'thinking' || stateRef.current === 'speaking') return;
     if (phaseRef.current === 'command' && stateRef.current === 'listening') return;
     syncSurfaceFlags();
 
     clearRestartTimer();
     phaseRef.current = 'wake';
-    // Don't clobber "speaking" — barge-in listening runs under that state.
-    if (stateRef.current !== 'speaking' && stateRef.current !== 'offline') {
+    if (stateRef.current !== 'offline') {
       setState('idle');
       stateRef.current = 'idle';
     }
@@ -882,7 +837,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           if (!armedRef.current || !brainOnlineRef.current) return;
           if (processingRef.current) return;
           if (phaseRef.current !== 'wake') return;
-          if (stateRef.current === 'thinking') return;
+          if (stateRef.current === 'thinking' || stateRef.current === 'speaking') {
+            return;
+          }
           clearRestartTimer();
           restartTimerRef.current = window.setTimeout(() => {
             startWakeListeningRef.current();
@@ -901,6 +858,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
 
   const startCommandListening = useCallback(() => {
     if (!recognitionRef.current.supported) return;
+    if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return;
+    if (processingRef.current) return;
     clearRestartTimer();
     phaseRef.current = 'command';
     setState('listening');
