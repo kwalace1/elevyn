@@ -91,7 +91,7 @@ export function createAiRouter(
         intent: {
           type: 'chat',
           reply:
-            'Opening Microsoft sign-in. If you just added new permissions, finish the consent screen so Elevyn can create meetings and send mail.',
+            'Opening Microsoft sign-in. Approve the new permissions on the consent screen so Elevyn can use To Do, OneDrive, contacts, presence, and Teams channels.',
           args: { openUrl: '/api/mslogin' },
         },
         execution: null,
