@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import type { ElevynState } from '../../types';
 
 const STATE_LABEL: Record<ElevynState, string> = {
-  idle: 'Ready',
+  idle: 'Standing by',
   listening: 'Listening',
   thinking: 'Thinking',
   speaking: 'Speaking',
@@ -19,8 +19,17 @@ interface AiCoreProps {
  */
 export function AiCore({ state }: AiCoreProps) {
   const isAlive = state !== 'offline';
+  const isIdle = state === 'idle';
   const pulse =
-    state === 'listening' ? 1.12 : state === 'thinking' ? 1.06 : state === 'speaking' ? 1.08 : 1;
+    state === 'listening'
+      ? 1.12
+      : state === 'thinking'
+        ? 1.06
+        : state === 'speaking'
+          ? 1.08
+          : isIdle
+            ? 1
+            : 1;
 
   return (
     <div className="ai-core" data-state={state} aria-label={`Elevyn ${STATE_LABEL[state]}`}>
@@ -33,11 +42,18 @@ export function AiCore({ state }: AiCoreProps) {
       <motion.div
         className="ai-core__halo"
         animate={{
-          scale: isAlive ? [1, 1.08, 1] : 1,
-          opacity: isAlive ? [0.35, 0.55, 0.35] : 0.15,
+          scale: isAlive ? (isIdle ? [1, 1.045, 1] : [1, 1.08, 1]) : 1,
+          opacity: isAlive ? (isIdle ? [0.28, 0.48, 0.28] : [0.35, 0.55, 0.35]) : 0.15,
         }}
         transition={{
-          duration: state === 'listening' ? 1.4 : state === 'thinking' ? 2.2 : 4,
+          duration:
+            state === 'listening'
+              ? 1.4
+              : state === 'thinking'
+                ? 2.2
+                : isIdle
+                  ? 5.5
+                  : 4,
           repeat: Infinity,
           ease: 'easeInOut',
         }}
@@ -47,10 +63,21 @@ export function AiCore({ state }: AiCoreProps) {
       <motion.div
         className="ai-core__ember"
         aria-hidden
-        animate={{ rotate: isAlive ? 360 : 0, opacity: isAlive ? 1 : 0.25 }}
+        animate={{
+          rotate: isAlive ? 360 : 0,
+          opacity: isAlive ? (isIdle ? [0.72, 0.95, 0.72] : 1) : 0.25,
+        }}
         transition={{
-          rotate: { duration: 90, repeat: Infinity, ease: 'linear' },
-          opacity: { duration: 1 },
+          rotate: {
+            duration: isIdle ? 110 : 90,
+            repeat: Infinity,
+            ease: 'linear',
+          },
+          opacity: {
+            duration: isIdle ? 4.5 : 1,
+            repeat: isIdle ? Infinity : 0,
+            ease: 'easeInOut',
+          },
         }}
       />
       <motion.div
@@ -58,16 +85,31 @@ export function AiCore({ state }: AiCoreProps) {
         aria-hidden
         animate={{ rotate: isAlive ? -360 : 0 }}
         transition={{
-          duration: state === 'thinking' ? 28 : 60,
+          duration:
+            state === 'thinking' ? 28 : isIdle ? 75 : 60,
           repeat: Infinity,
           ease: 'linear',
         }}
       />
 
+      {/* Ambient sweep — only while standing by. */}
+      {isIdle ? (
+        <motion.div
+          className="ai-core__ambient-sweep"
+          aria-hidden
+          animate={{ rotate: 360 }}
+          transition={{ duration: 18, repeat: Infinity, ease: 'linear' }}
+        />
+      ) : null}
+
       <motion.div
         className="ai-core__orbit ai-core__orbit--outer"
         animate={{ rotate: isAlive ? 360 : 0 }}
-        transition={{ duration: 36, repeat: Infinity, ease: 'linear' }}
+        transition={{
+          duration: isIdle ? 48 : 36,
+          repeat: Infinity,
+          ease: 'linear',
+        }}
       >
         <span />
         <span />
@@ -76,18 +118,22 @@ export function AiCore({ state }: AiCoreProps) {
 
       <motion.div
         className="ai-core__ring ai-core__ring--primary"
-        animate={{ rotate: state === 'thinking' ? 360 : [0, 8, 0] }}
+        animate={{
+          rotate: state === 'thinking' ? 360 : isIdle ? [0, 12, 0] : [0, 8, 0],
+        }}
         transition={{
-          duration: state === 'thinking' ? 4 : 10,
+          duration: state === 'thinking' ? 4 : isIdle ? 14 : 10,
           repeat: Infinity,
           ease: state === 'thinking' ? 'linear' : 'easeInOut',
         }}
       />
       <motion.div
         className="ai-core__ring ai-core__ring--secondary"
-        animate={{ rotate: state === 'thinking' ? -360 : [0, -12, 0] }}
+        animate={{
+          rotate: state === 'thinking' ? -360 : isIdle ? [0, -16, 0] : [0, -12, 0],
+        }}
         transition={{
-          duration: state === 'thinking' ? 7 : 14,
+          duration: state === 'thinking' ? 7 : isIdle ? 18 : 14,
           repeat: Infinity,
           ease: state === 'thinking' ? 'linear' : 'easeInOut',
         }}
@@ -96,7 +142,7 @@ export function AiCore({ state }: AiCoreProps) {
       <motion.div
         className="ai-core__orb"
         animate={{
-          scale: pulse,
+          scale: isIdle ? [1, 1.025, 1] : pulse,
           boxShadow:
             state === 'listening'
               ? '0 0 60px rgba(255, 166, 42, 0.55), 0 0 120px rgba(255, 140, 20, 0.25)'
@@ -106,9 +152,14 @@ export function AiCore({ state }: AiCoreProps) {
                   ? '0 0 40px rgba(255, 166, 42, 0.35), inset 0 0 40px rgba(255, 166, 42, 0.15)'
                   : state === 'offline'
                     ? '0 0 20px rgba(120, 120, 120, 0.2)'
-                    : '0 0 40px rgba(255, 166, 42, 0.28), 0 0 80px rgba(255, 140, 20, 0.12)',
+                    : '0 0 36px rgba(255, 166, 42, 0.22), 0 0 90px rgba(255, 140, 20, 0.14)',
         }}
-        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+        transition={{
+          scale: isIdle
+            ? { duration: 5.5, repeat: Infinity, ease: 'easeInOut' }
+            : { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
+          boxShadow: { duration: 0.45, ease: [0.22, 1, 0.36, 1] },
+        }}
       >
         <motion.div
           className="ai-core__core"

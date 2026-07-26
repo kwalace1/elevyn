@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ElevynState, SurfaceCommand } from '../types';
+import type { ElevynState, SurfaceCommand, SurfacePanel } from '../types';
 import { elevynApi } from '../services/api/client';
 import { BrowserSpeechRecognition } from '../services/voice/recognition';
 import { ElevynSpeech } from '../services/voice/elevynSpeech';
 import { SessionMemory } from '../services/session/memory';
+import {
+  buildPresenceSnapshot,
+  buildWakeBrief,
+} from '../services/presence/brief';
 import {
   isEchoOfReply,
   matchAddress,
@@ -20,6 +24,8 @@ export interface ElevynHooks {
   onSurface?: (cmd: SurfaceCommand) => void;
   /** Supplies on-screen context (notes/capture) for summarize + recall. */
   getContext?: () => string | undefined;
+  /** Live panels for proactive wake briefs. */
+  getPanels?: () => SurfacePanel[];
   /** Live surface flags (work mode / capture armed) — survives refresh. */
   getSurfaceFlags?: () => { work: boolean; capturing: boolean };
 }
@@ -61,6 +67,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   // Reply currently being spoken — used to tell Kevin's interruption apart
   // from the mic hearing Elevyn's own voice.
   const speakingReplyRef = useRef('');
+  // Throttle situational wake briefs so Elevyn does not monologue every "Elevyn".
+  const lastBriefAtRef = useRef(0);
 
   const startWakeListeningRef = useRef<() => void>(() => {});
   const startCommandListeningRef = useRef<() => void>(() => {});
@@ -68,12 +76,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const onWakeRef = useRef<ElevynHooks['onWake']>(hooks.onWake);
   const onSurfaceRef = useRef<ElevynHooks['onSurface']>(hooks.onSurface);
   const getContextRef = useRef<ElevynHooks['getContext']>(hooks.getContext);
+  const getPanelsRef = useRef<ElevynHooks['getPanels']>(hooks.getPanels);
   const getSurfaceFlagsRef = useRef<ElevynHooks['getSurfaceFlags']>(
     hooks.getSurfaceFlags,
   );
   onWakeRef.current = hooks.onWake;
   onSurfaceRef.current = hooks.onSurface;
   getContextRef.current = hooks.getContext;
+  getPanelsRef.current = hooks.getPanels;
   getSurfaceFlagsRef.current = hooks.getSurfaceFlags;
 
   const syncSurfaceFlags = useCallback(() => {
@@ -387,6 +397,19 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   ]);
   const greetIndexRef = useRef(0);
 
+  const dayPart = useCallback((): 'morning' | 'afternoon' | 'evening' => {
+    const hour = Number(
+      new Intl.DateTimeFormat('en-US', {
+        hour: 'numeric',
+        hour12: false,
+        timeZone: 'America/New_York',
+      }).format(new Date()),
+    );
+    if (hour < 12) return 'morning';
+    if (hour < 18) return 'afternoon';
+    return 'evening';
+  }, []);
+
   const enterCommandMode = useCallback(
     (seedCommand?: string) => {
       clearCommandTimeout();
@@ -394,6 +417,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearCommandDebounce();
       clearWakeCommit();
       recognitionRef.current.abort();
+      syncSurfaceFlags();
       phaseRef.current = 'command';
       // Bring Elevyn forward (dashboard → focus).
       onWakeRef.current?.();
@@ -408,13 +432,35 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         return;
       }
 
-      // Always speak a short ack so Kevin knows Elevyn heard him —
-      // silent "Listening…" felt like the mic was dead in work mode.
+      // Prefer a sparse situational brief when something is worth noticing;
+      // otherwise a short Jarvis ack. Never brief twice within ~80s.
       ttsRef.current.stop();
-      const greeting = workModeRef.current
-        ? 'Yes?'
-        : wakeGreetings.current[greetIndexRef.current % wakeGreetings.current.length];
-      if (!workModeRef.current) greetIndexRef.current += 1;
+      speakingReplyRef.current = '';
+      const panels = getPanelsRef.current?.() ?? [];
+      const snap = buildPresenceSnapshot(panels, sessionRef.current.snapshot());
+      const now = Date.now();
+      const briefFresh = now - lastBriefAtRef.current > 80_000;
+      const brief =
+        briefFresh && !workModeRef.current
+          ? buildWakeBrief(snap, dayPart())
+          : briefFresh && workModeRef.current
+            ? buildWakeBrief(snap, 'generic')
+            : null;
+
+      let greeting: string;
+      if (brief) {
+        lastBriefAtRef.current = now;
+        greeting = brief;
+      } else if (workModeRef.current) {
+        greeting = 'Yes?';
+      } else {
+        greeting =
+          wakeGreetings.current[
+            greetIndexRef.current % wakeGreetings.current.length
+          ];
+        greetIndexRef.current += 1;
+      }
+
       speak(greeting, () => {
         if (phaseRef.current !== 'command') return;
         startCommandListeningRef.current();
@@ -427,8 +473,10 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearCommandTimeout,
       clearRestartTimer,
       clearWakeCommit,
+      dayPart,
       processUtterance,
       speak,
+      syncSurfaceFlags,
     ],
   );
 
@@ -747,11 +795,13 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     startListening();
   }, [startListening, state, stopListening]);
 
-  // Spoken announcement Elevyn initiates itself (e.g. a timer finishing),
-  // then quietly returns to listening.
+  // Spoken announcement Elevyn initiates itself (timer warning, time up),
+  // then quietly returns to listening. Never interrupts an active exchange.
   const announce = useCallback(
     (text: string) => {
       if (processingRef.current) return;
+      if (stateRef.current === 'thinking' || stateRef.current === 'speaking') return;
+      if (phaseRef.current === 'command') return;
       recognitionRef.current.abort();
       phaseRef.current = 'wake';
       speak(text, resumeWakeSoon);
@@ -774,5 +824,6 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     toggleArmed,
     processUtterance,
     announce,
+    getSessionSnapshot: () => sessionRef.current.snapshot(),
   };
 }

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { AiCore } from '../orb/AiCore';
 import { MicButton } from '../voice/MicButton';
 import { LeftRail, RightRail } from '../dashboard/Rails';
@@ -8,6 +8,11 @@ import { useClock } from '../../hooks/useClock';
 import { useDashboard } from '../../hooks/useDashboard';
 import { useElevyn } from '../../hooks/useElevyn';
 import { useSurface } from '../../hooks/useSurface';
+import {
+  buildPresenceSnapshot,
+  buildPresenceStatus,
+  buildTimerNudge,
+} from '../../services/presence/brief';
 
 export function Shell() {
   const { time, date, greeting } = useClock();
@@ -18,16 +23,51 @@ export function Shell() {
     onWake: surface.enterFocus,
     onSurface: surface.applySurface,
     getContext: surface.getContext,
+    getPanels: () => surface.panels,
     getSurfaceFlags: () => ({
       work: surface.view === 'work',
       capturing: surface.panels.some((p) => p.kind === 'capture' && Boolean(p.armed)),
     }),
   });
 
+  const presenceStatus = useMemo(() => {
+    const session = elevyn.getSessionSnapshot();
+    return buildPresenceStatus(
+      buildPresenceSnapshot(surface.panels, session),
+    );
+    // Session snapshot is read live; panels drive recompute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surface.panels, elevyn.response, elevyn.transcript]);
+
   const focusGreeting = useMemo(() => {
     if (elevyn.state === 'thinking') return 'One moment…';
     return `${greeting}. How may I help?`;
   }, [elevyn.state, greeting]);
+
+  // Soft timer nudge at ~60s — once per timer, never while Elevyn is mid-exchange.
+  const announceRef = useRef(elevyn.announce);
+  announceRef.current = elevyn.announce;
+  const nudgedTimersRef = useRef(new Set<string>());
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      for (const panel of surface.panels) {
+        if (panel.kind !== 'timer' || !panel.endsAt) continue;
+        const left = Math.round(
+          (new Date(panel.endsAt).getTime() - Date.now()) / 1000,
+        );
+        if (left <= 0) {
+          nudgedTimersRef.current.delete(panel.id);
+          continue;
+        }
+        // Fire once as the countdown crosses the one-minute mark.
+        if (left <= 60 && left > 45 && !nudgedTimersRef.current.has(panel.id)) {
+          nudgedTimersRef.current.add(panel.id);
+          announceRef.current(buildTimerNudge(left, panel.title));
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [surface.panels]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -53,7 +93,7 @@ export function Shell() {
   const inFocus = surface.view !== 'dashboard';
 
   return (
-    <div className="shell">
+    <div className="shell" data-state={elevyn.state}>
       <div className="shell__atmosphere" aria-hidden />
       <div className="shell__grain" aria-hidden />
       <div className="shell__grid" aria-hidden />
@@ -75,7 +115,8 @@ export function Shell() {
           </div>
           <div className="shell__greeting">
             <span className="shell__live-pip" aria-hidden />
-            {greeting}, Kevin <span className="shell__divider">/</span> All systems standing by
+            {greeting}, Kevin <span className="shell__divider">/</span>{' '}
+            <span className="shell__presence-status">{presenceStatus}</span>
           </div>
         </motion.div>
 
@@ -106,7 +147,7 @@ export function Shell() {
           <div className="shell__core-kicker">
             <span>Neural interface</span>
             <i />
-            <span>Core online</span>
+            <span>{elevyn.state === 'idle' ? 'Standing by' : 'Core online'}</span>
           </div>
           <AiCore state={elevyn.state} />
           <MicButton
@@ -124,9 +165,26 @@ export function Shell() {
               : 'Use Chrome for voice · brain still accepts text API'}
           </p>
           <div className="shell__core-telemetry" aria-hidden>
-            <span>LATENCY <b>12ms</b></span>
-            <span>VOICE <b>ARMED</b></span>
-            <span>LINK <b>SECURE</b></span>
+            <span>
+              PRESENCE{' '}
+              <b>
+                {elevyn.state === 'idle'
+                  ? 'AMBIENT'
+                  : elevyn.state === 'listening'
+                    ? 'ATTENTIVE'
+                    : elevyn.state === 'thinking'
+                      ? 'PROCESSING'
+                      : elevyn.state === 'speaking'
+                        ? 'SPEAKING'
+                        : 'OFFLINE'}
+              </b>
+            </span>
+            <span>
+              VOICE <b>{elevyn.armed ? 'ARMED' : 'PAUSED'}</b>
+            </span>
+            <span>
+              LINK <b>{elevyn.brainOnline ? 'SECURE' : 'DOWN'}</b>
+            </span>
           </div>
         </section>
 
