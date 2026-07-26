@@ -1,0 +1,697 @@
+/**
+ * Elevyn brain orchestration.
+ *
+ * Separates "understanding intent" from "executing commands" and from "chatting".
+ * When Ollama is offline we still run a deterministic local interpreter so the
+ * MVP demo never dies — open Cursor should work even without a model loaded.
+ */
+
+import type { CommandDefinition, InterpretedIntent } from '../../../src/types/index.js';
+import type { AIProviderRegistry } from './registry.js';
+import type { CommandRegistry } from '../commands/registry.js';
+import type { MemoryService } from '../memory/store.js';
+
+const SYSTEM_PROMPT = `You are Elevyn, Kevin's formal AI aide and workspace operating system — calm, precise, loyal, like Jarvis.
+Address Kevin as "sir" in every spoken reply. Prefer formal confirmations such as: "Yes sir.", "No sir.", "Of course, sir.", "Right away, sir.", "Certainly, sir.", "At once, sir."
+Speak in short natural British English suitable for text-to-speech (1-2 sentences max).
+Be respectful and confident, never chatty or casual. Avoid slang. Never use markdown, bullet lists, or emoji.
+
+Respond with ONLY one JSON object on a single line, matching one of these shapes:
+
+Control the computer:
+{"type":"command","commandId":"<id>","args":{...},"reply":"<spoken confirmation>"}
+
+Change the on-screen surface or create content on screen:
+{"type":"surface","surface":{"op":"<op>","title":"<optional>","text":"<optional>","items":["..."]},"reply":"<spoken confirmation>"}
+Valid surface ops:
+- "work": clear the screen to a minimal work canvas (say when Kevin says "let's work", "focus mode", "let's get to work")
+- "dashboard": go back to the home dashboard ("go home", "show dashboard", "home screen")
+- "clear": remove all on-screen panels ("clear the screen", "clean up", "reset")
+- "createNote": make a note. Put the note content in "text", optional "title".
+- "createTask": add a task/reminder. Put it in "text".
+- "createList": make a list. Put entries in "items", optional "title".
+- "addItem": add one entry to the current list/tasks. Put it in "text".
+- "removeLast": undo/remove the most recent panel.
+- "startCapture": begin capturing meeting notes.
+- "stopCapture": stop capturing meeting notes.
+- "appendCapture": add a line to the meeting capture. Put it in "text".
+- "timer": start a countdown. Put the length in "seconds", optional "title".
+- "cancelTimer": cancel the running timer.
+
+Just chatting or answering a question:
+{"type":"chat","reply":"<spoken answer>"}
+
+Prefer commands/surface actions when Kevin clearly wants an action. Always address him as sir.`;
+
+export class ElevynBrain {
+  constructor(
+    private readonly ai: AIProviderRegistry,
+    private readonly commands: CommandRegistry,
+    private readonly memory?: MemoryService,
+  ) {}
+
+  async interpret(
+    utterance: string,
+    context?: string,
+  ): Promise<InterpretedIntent> {
+    const trimmed = utterance.trim();
+    if (!trimmed) {
+      return { type: 'chat', reply: 'Pardon me, sir — I did not catch that.' };
+    }
+
+    const local = this.matchLocalIntent(trimmed);
+    if (local) return local;
+
+    // Memory + summarize need async work / context, so they run after the
+    // fast synchronous matchers but before the model.
+    const async = await this.matchAsyncIntent(trimmed, context);
+    if (async) return async;
+
+    const provider = await this.ai.resolve();
+    if (!provider) {
+      return {
+        type: 'chat',
+        reply:
+          'I am online, sir, but no AI provider is available yet. Add an OpenRouter key, start Ollama, or try a command like open Cursor.',
+      };
+    }
+
+    const catalog = this.commands
+      .list()
+      .map(
+        (c: CommandDefinition) =>
+          `- ${c.id}: ${c.description}. Examples: ${c.examples.join('; ')}`,
+      )
+      .join('\n');
+
+    try {
+      const completion = await this.ai.complete({
+        messages: [
+          { role: 'system', content: `${SYSTEM_PROMPT}\n\nCommands:\n${catalog}` },
+          { role: 'user', content: trimmed },
+        ],
+        temperature: 0.2,
+        // Enough headroom that a JSON chat reply is never cut mid-string —
+        // truncated JSON used to leak raw {"type":"chat"... to the user.
+        maxTokens: 260,
+      });
+
+      return this.parseModelIntent(completion.content, trimmed);
+    } catch {
+      return {
+        type: 'chat',
+        reply: 'Forgive me, sir — something went wrong reaching the model. Your system commands still work.',
+      };
+    }
+  }
+
+  /** Deterministic parser for tonight's demo reliability. */
+  private matchLocalIntent(utterance: string): InterpretedIntent | null {
+    const lower = utterance.toLowerCase();
+
+    // Surface intents first so phrases like "start capture" / "start a timer"
+    // are not mistaken for "start <app>".
+    const surface = this.matchSurfaceIntent(utterance, lower);
+    if (surface) return surface;
+
+    const openMatch =
+      lower.match(/^(?:please\s+)?(?:open|launch|start|run)\s+(.+)$/i) ??
+      lower.match(/^(?:can you |could you )?(?:open|launch|start)\s+(.+)$/i);
+
+    if (openMatch) {
+      const raw = openMatch[1].replace(/[.!?]+$/, '').trim();
+      const app = this.normalizeAppName(raw);
+      if (!app) {
+        return {
+          type: 'chat',
+          reply: `No sir — I am not sure which app you mean by ${raw}.`,
+        };
+      }
+      return {
+        type: 'command',
+        commandId: 'open.app',
+        args: { app },
+        reply: `Yes sir. Opening ${app}.`,
+      };
+    }
+
+    const closeMatch = lower.match(
+      /^(?:please\s+)?(?:can you |could you )?(?:close|quit|exit)\s+(.+)$/i,
+    );
+    if (closeMatch) {
+      const raw = closeMatch[1].replace(/[.!?]+$/, '').trim();
+      // "close the screen / notes / everything" is a surface clear, not an app.
+      if (!/^(the\s+)?(screen|board|canvas|notes?|everything|panels?)$/i.test(raw)) {
+        const app = this.normalizeAppName(raw);
+        if (app) {
+          return {
+            type: 'command',
+            commandId: 'close.app',
+            args: { app },
+            reply: `Yes sir. Closing ${app}.`,
+          };
+        }
+      }
+    }
+
+    if (/\b(what time|current time|what's the time)\b/i.test(lower)) {
+      const time = new Date().toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      return { type: 'chat', reply: `It is ${time}, sir.` };
+    }
+
+    if (/\b(who are you|what are you|introduce yourself)\b/i.test(lower)) {
+      return {
+        type: 'chat',
+        reply: 'I am Elevyn, sir — your workspace operating system. I am here when you need me.',
+      };
+    }
+
+    // Capabilities — answer locally so this never depends on the model.
+    if (
+      /\b(what can you do|what do you do|what are you capable of|list (?:your )?(?:commands|abilities|capabilities)|what commands|how can you help)\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'chat',
+        reply:
+          'Quite a lot, sir. I take notes, track tasks and lists, run timers, and capture meetings as you speak. I open and close applications, remember things you tell me, summarize what is on screen, and copy it to your clipboard. Say "work mode" and I will set the stage.',
+      };
+    }
+
+    if (/^(hi|hello|hey|good morning|good afternoon|good evening)\b/i.test(lower)) {
+      const hour = new Date().getHours();
+      const greeting =
+        hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+      return { type: 'chat', reply: `${greeting}, sir. How may I assist you?` };
+    }
+
+    if (/\b(lock (the )?(mac|computer|screen)|lock screen)\b/i.test(lower)) {
+      return {
+        type: 'command',
+        commandId: 'system.lock',
+        args: {},
+        reply: 'Yes sir. Locking your Mac.',
+      };
+    }
+
+    if (/\b(sleep (the )?(mac|computer)|put (it|the mac|computer) to sleep)\b/i.test(lower)) {
+      return {
+        type: 'command',
+        commandId: 'system.sleep',
+        args: {},
+        reply: 'Yes sir. Putting the Mac to sleep.',
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Surface intents drive the Jarvis view on the client (create notes, focus,
+   * clear, etc). Matched deterministically first so the demo is reliable.
+   */
+  private matchSurfaceIntent(
+    original: string,
+    lower: string,
+  ): InterpretedIntent | null {
+    // Enter minimal work canvas.
+    if (
+      /\b(let'?s (get to )?work|work mode|focus mode|deep work|let'?s get started|clear the desk)\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'surface',
+        surface: { op: 'work' },
+        reply: 'Yes sir.',
+      };
+    }
+
+    // Back home.
+    if (
+      /\b(go home|home screen|show (the )?dashboard|back to dashboard|show home)\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'surface',
+        surface: { op: 'dashboard' },
+        reply: 'Yes sir. Back to your dashboard.',
+      };
+    }
+
+    // Clear panels.
+    if (
+      /\b(clear (the )?(screen|board|canvas|notes|everything)|clean (it |this )?up|reset (the )?(screen|board)|wipe (the )?(screen|board))\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'surface',
+        surface: { op: 'clear' },
+        reply: 'Yes sir. Cleared.',
+      };
+    }
+
+    // Make a note.
+    const noteMatch = original.match(
+      /^(?:can you |could you |please )?(?:make|take|create|write|jot|add|new)\s+(?:a |an )?note(?:\s+(?:that|about|saying|to))?\s*[:,-]?\s*(.*)$/i,
+    );
+    if (noteMatch) {
+      const text = noteMatch[1].replace(/[.!?]+$/, '').trim();
+      return {
+        type: 'surface',
+        surface: { op: 'createNote', text: text || undefined },
+        reply: text ? 'Yes sir. Noted.' : 'What should the note say, sir?',
+        awaiting: text ? undefined : 'note',
+      };
+    }
+
+    // Add a task / reminder.
+    const taskMatch = original.match(
+      /^(?:can you |could you |please )?(?:make|create|add|new)\s+(?:a |an )?task(?:\s+(?:to|that))?\s*[:,-]?\s*(.*)$/i,
+    );
+    const remindMatch = original.match(
+      /^(?:can you |could you |please )?remind me(?:\s+to)?\s*[:,-]?\s*(.*)$/i,
+    );
+    const taskText = (taskMatch?.[1] ?? remindMatch?.[1] ?? '')
+      .replace(/[.!?]+$/, '')
+      .trim();
+    if (taskMatch || remindMatch) {
+      return {
+        type: 'surface',
+        surface: { op: 'createTask', text: taskText || undefined },
+        reply: taskText ? "Yes sir. I'll track that." : 'What is the task, sir?',
+        awaiting: taskText ? undefined : 'task',
+      };
+    }
+
+    // Meeting capture: start / stop.
+    if (
+      /\b(start|begin|open)\s+(?:a\s+)?(capture|meeting|recording|minutes)\b/i.test(
+        lower,
+      ) ||
+      /\bcapture (this )?meeting\b/i.test(lower) ||
+      /\btake minutes\b/i.test(lower)
+    ) {
+      return {
+        type: 'surface',
+        surface: { op: 'startCapture' },
+        reply: 'Yes sir. Capturing.',
+      };
+    }
+    if (
+      /\b(stop|end|finish|pause)\s+(?:the\s+)?(capture|meeting|recording|minutes)\b/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'surface',
+        surface: { op: 'stopCapture' },
+        reply: 'Yes sir. Capture stopped.',
+      };
+    }
+
+    // Append a line to the meeting capture.
+    const captureLine = original.match(
+      /^(?:note that|capture that|capture this|for the record|minute that|log that|jot that)\s+(.+)$/i,
+    );
+    if (captureLine) {
+      const text = captureLine[1].replace(/[.!?]+$/, '').trim();
+      return {
+        type: 'surface',
+        surface: { op: 'appendCapture', text },
+        // Empty reply → client stays silent (visual "Captured." only).
+        reply: '',
+      };
+    }
+
+    // Timers.
+    if (/\b(cancel|stop|clear)\s+(the\s+)?timer\b/i.test(lower)) {
+      return {
+        type: 'surface',
+        surface: { op: 'cancelTimer' },
+        reply: 'Yes sir. Timer cancelled.',
+      };
+    }
+    const timerMatch = lower.match(
+      /\b(?:set|start)\s+(?:a\s+)?timer\s+(?:for\s+)?(.+)$/i,
+    );
+    if (timerMatch) {
+      const seconds = parseDuration(timerMatch[1]);
+      if (seconds > 0) {
+        return {
+          type: 'surface',
+          surface: { op: 'timer', seconds, title: formatDuration(seconds) },
+          reply: `Yes sir. Timer set for ${formatDuration(seconds)}.`,
+        };
+      }
+      return {
+        type: 'chat',
+        reply: 'For how long, sir?',
+        awaiting: 'timer',
+      };
+    }
+
+    // Make a list (optionally with inline items separated by commas / "and").
+    const listMatch = original.match(
+      /^(?:can you |could you |please )?(?:make|create|start|new)\s+(?:a |an )?list(?:\s+(?:of|for|called|titled))?\s*[:,-]?\s*(.*)$/i,
+    );
+    if (listMatch) {
+      const rest = listMatch[1].trim();
+      const items = rest
+        ? rest
+            .split(/,|\band\b/i)
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+      return {
+        type: 'surface',
+        surface: {
+          op: 'createList',
+          title: items.length > 1 ? undefined : rest || undefined,
+          items: items.length > 1 ? items : undefined,
+        },
+        reply: 'Yes sir. List created.',
+      };
+    }
+
+    // Undo / remove the last panel.
+    if (
+      /^(?:undo(?:\s+that)?|scratch that|remove (?:the )?last|delete (?:the )?last|take that back)\.?$/i.test(
+        lower,
+      )
+    ) {
+      return {
+        type: 'surface',
+        surface: { op: 'removeLast' },
+        reply: 'Yes sir. Removed.',
+      };
+    }
+
+    // Add one item to the current list/tasks ("add milk", "also add eggs").
+    const addMatch = original.match(
+      /^(?:also\s+|and\s+)?add\s+(.+?)(?:\s+to\s+(?:the\s+)?(?:list|tasks?))?\.?$/i,
+    );
+    if (addMatch) {
+      const text = addMatch[1].replace(/[.!?]+$/, '').trim();
+      // Don't swallow "add a note/task/list" — those are handled above.
+      if (text && !/^(a |an )?(note|task|list|reminder)\b/i.test(text)) {
+        return {
+          type: 'surface',
+          surface: { op: 'addItem', text },
+          reply: 'Yes sir. Added.',
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Intents that need durable memory or the AI model with on-screen context.
+   * Run after the synchronous matchers, before the general model fallback.
+   */
+  private async matchAsyncIntent(
+    original: string,
+    context?: string,
+  ): Promise<InterpretedIntent | null> {
+    const lower = original.toLowerCase();
+
+    // Remember something durably.
+    const rememberMatch = original.match(
+      /^(?:please\s+)?(?:remember|note to self|keep in mind|don'?t forget)(?:\s+that|\s+this)?\s*[:,-]?\s*(.+)$/i,
+    );
+    if (rememberMatch) {
+      const content = rememberMatch[1].replace(/[.!?]+$/, '').trim();
+      if (!content) {
+        return { type: 'chat', reply: 'What should I remember, sir?' };
+      }
+      if (this.memory) {
+        try {
+          await this.memory.create({
+            category: 'notes',
+            title: content.split(/\s+/).slice(0, 6).join(' '),
+            content,
+            tags: ['voice'],
+          });
+        } catch {
+          // If persistence fails we still acknowledge — memory is best-effort.
+        }
+      }
+      return { type: 'chat', reply: "Yes sir. I'll remember that." };
+    }
+
+    // Recall from memory.
+    const recallMatch = original.match(
+      /^(?:what do you know about|what do you remember about|what did i say about|do you remember|recall|remind me (?:about|of)|tell me about)\s+(.+)$/i,
+    );
+    if (recallMatch && this.memory) {
+      const query = recallMatch[1].replace(/[.!?]+$/, '').trim();
+      try {
+        const hits = await this.memory.search(query);
+        if (hits.length) {
+          const top = hits[0];
+          return {
+            type: 'chat',
+            reply: `Here is what I have, sir: ${top.content}`,
+          };
+        }
+        return {
+          type: 'chat',
+          reply: `I have nothing on ${query}, sir.`,
+        };
+      } catch {
+        return { type: 'chat', reply: 'I could not reach my memory, sir.' };
+      }
+    }
+
+    // Summarize the on-screen notes / capture.
+    if (
+      /^(?:summar(?:ize|ise)|give me a summary|sum (?:this|it) up|recap)\b/i.test(
+        lower,
+      )
+    ) {
+      const source = (context ?? '').trim();
+      if (!source) {
+        return {
+          type: 'chat',
+          reply: 'There is nothing to summarize yet, sir.',
+        };
+      }
+      const summary = await this.summarize(source);
+      return {
+        type: 'surface',
+        surface: { op: 'createNote', title: 'Summary', text: summary },
+        reply: `Here is your summary, sir. ${summary}`,
+      };
+    }
+
+    // Read back on-screen notes / capture aloud.
+    if (
+      /^(?:read (?:that|it|them|my notes|the notes|the capture|that back)|what (?:did i|have i) (?:capture|note|write)|play (?:that|it) back)\b/i.test(
+        lower,
+      )
+    ) {
+      const source = (context ?? '').trim();
+      if (!source) {
+        return { type: 'chat', reply: 'Nothing on screen yet, sir.' };
+      }
+      const spoken = source.replace(/\n+/g, '. ').slice(0, 500);
+      return { type: 'chat', reply: spoken };
+    }
+
+    // Copy notes / capture to the clipboard (client handles the actual write).
+    if (
+      /^(?:copy (?:that|it|them|my notes|the notes|the capture)|copy to clipboard)\b/i.test(
+        lower,
+      )
+    ) {
+      const source = (context ?? '').trim();
+      if (!source) {
+        return { type: 'chat', reply: 'Nothing to copy yet, sir.' };
+      }
+      return {
+        type: 'chat',
+        reply: 'Yes sir. Copied to your clipboard.',
+        // Stash payload in args so the client can write it.
+        args: { clipboard: source },
+      };
+    }
+
+    return null;
+  }
+
+  private async summarize(source: string): Promise<string> {
+    const provider = await this.ai.resolve();
+    if (provider) {
+      try {
+        const completion = await this.ai.complete({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are Elevyn. Summarize the following notes into 2-3 concise sentences of plain British English. No markdown, no lists.',
+            },
+            { role: 'user', content: source },
+          ],
+          temperature: 0.3,
+          maxTokens: 240,
+        });
+        const text = completion.content.trim();
+        if (text) return text.replace(/\s+/g, ' ');
+      } catch {
+        // fall through to extractive fallback
+      }
+    }
+    // Fallback: first couple of sentences.
+    const sentences = source
+      .replace(/\s+/g, ' ')
+      .split(/(?<=[.!?])\s+/)
+      .filter(Boolean);
+    return sentences.slice(0, 2).join(' ') || source.slice(0, 200);
+  }
+
+  private normalizeAppName(raw: string): string | null {
+    const cleaned = raw.replace(/^(the|my|an?)\s+/i, '').trim();
+    const aliases: Record<string, string> = {
+      cursor: 'Cursor',
+      finder: 'Finder',
+      spotify: 'Spotify',
+      chrome: 'Google Chrome',
+      'google chrome': 'Google Chrome',
+      terminal: 'Terminal',
+      safari: 'Safari',
+      notes: 'Notes',
+      mail: 'Mail',
+      calendar: 'Calendar',
+      messages: 'Messages',
+      'vs code': 'Visual Studio Code',
+      vscode: 'Visual Studio Code',
+      code: 'Visual Studio Code',
+      slack: 'Slack',
+      discord: 'Discord',
+      notion: 'Notion',
+      figma: 'Figma',
+      music: 'Music',
+      'system settings': 'System Settings',
+      settings: 'System Settings',
+    };
+
+    const key = cleaned.toLowerCase();
+    if (aliases[key]) return aliases[key];
+
+    // Title-case unknown apps — `open -a` often still works on macOS.
+    if (cleaned.length < 2) return null;
+    return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  private parseModelIntent(raw: string, fallbackUtterance: string): InterpretedIntent {
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]) as InterpretedIntent;
+        if (parsed.type === 'command' && parsed.commandId && parsed.reply) {
+          return {
+            type: 'command',
+            commandId: parsed.commandId,
+            args: parsed.args ?? {},
+            reply: parsed.reply,
+          };
+        }
+        if (parsed.type === 'surface' && parsed.surface?.op) {
+          return {
+            type: 'surface',
+            surface: parsed.surface,
+            reply: parsed.reply || 'Yes sir.',
+          };
+        }
+        if (parsed.type === 'chat' && parsed.reply) {
+          return { type: 'chat', reply: parsed.reply };
+        }
+      } catch {
+        // fall through
+      }
+    }
+
+    // Salvage a truncated JSON reply (hit the token cap mid-string) so the
+    // user hears the sentence, never the raw JSON wrapper.
+    const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)/);
+    if (replyMatch?.[1]) {
+      let reply = replyMatch[1]
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, ' ')
+        .trim();
+      // Drop a trailing half-word left by the cutoff.
+      if (!/[.!?…"]$/.test(reply)) {
+        reply = reply.replace(/\s+\S*$/, '').trim();
+        if (reply) reply += '.';
+      }
+      if (reply) return { type: 'chat', reply };
+    }
+
+    // Retry local match if the model returned prose.
+    const local = this.matchLocalIntent(fallbackUtterance);
+    if (local) return local;
+
+    // Never surface raw JSON scaffolding to the user.
+    const cleaned = raw
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/\{[\s\S]*\}?/g, '')
+      .trim();
+    return {
+      type: 'chat',
+      reply: cleaned.slice(0, 280) || 'Understood, sir.',
+    };
+  }
+}
+
+/** Parse a spoken duration ("5 minutes", "1 minute 30 seconds", "an hour"). */
+function parseDuration(input: string): number {
+  const text = input.toLowerCase().trim();
+  if (!text) return 0;
+
+  const words: Record<string, number> = {
+    a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+    seven: 7, eight: 8, nine: 9, ten: 10, fifteen: 15, twenty: 20,
+    thirty: 30, forty: 40, fifty: 50, sixty: 60, half: 0.5,
+  };
+
+  let total = 0;
+  let matched = false;
+  const unitRe = /(\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty|half)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b/g;
+
+  let m: RegExpExecArray | null;
+  while ((m = unitRe.exec(text)) !== null) {
+    const value = /^\d/.test(m[1]) ? parseFloat(m[1]) : words[m[1]] ?? 0;
+    const unit = m[2];
+    if (/^h/.test(unit)) total += value * 3600;
+    else if (/^m/.test(unit)) total += value * 60;
+    else total += value;
+    matched = true;
+  }
+
+  // Bare number with no unit → assume minutes ("timer for 5").
+  if (!matched) {
+    const bare = text.match(/^(\d+(?:\.\d+)?)$/);
+    if (bare) total = parseFloat(bare[1]) * 60;
+  }
+
+  return Math.round(total);
+}
+
+/** Human-readable duration for spoken confirmations + panel titles. */
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const parts: string[] = [];
+  if (h) parts.push(`${h} hour${h > 1 ? 's' : ''}`);
+  if (m) parts.push(`${m} minute${m > 1 ? 's' : ''}`);
+  if (s) parts.push(`${s} second${s > 1 ? 's' : ''}`);
+  return parts.join(' ') || '0 seconds';
+}

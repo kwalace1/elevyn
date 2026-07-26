@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-server
+.git
+.env
+.env.*
+!.env.example
+data/memory/store.json
+docs
+public
+index.html
+vite.config.ts
+*.log
+.DS_Store
