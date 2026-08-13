@@ -19,9 +19,9 @@ const execFileAsync = promisify(execFile);
 
 const EDGE_VOICE = process.env.ELEVYN_TTS_VOICE ?? 'en-GB-SoniaNeural';
 /** Match Vercel api/speak.py so local and hosted Sonia sound the same. */
-const EDGE_RATE = process.env.ELEVYN_TTS_RATE ?? '-4%';
-const EDGE_PITCH = process.env.ELEVYN_TTS_PITCH ?? '-2Hz';
-const SAY_FALLBACK = process.env.ELEVYN_SAY_VOICE ?? 'Daniel';
+const EDGE_RATE = process.env.ELEVYN_TTS_RATE ?? '-2%';
+const EDGE_PITCH = process.env.ELEVYN_TTS_PITCH ?? '+1Hz';
+const SAY_FALLBACK = process.env.ELEVYN_SAY_VOICE ?? 'Samantha';
 const PYTHON = process.env.ELEVYN_PYTHON ?? 'python3';
 
 const PREWARM_PHRASES = [

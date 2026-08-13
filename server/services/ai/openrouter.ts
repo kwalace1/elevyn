@@ -17,11 +17,13 @@ const OPENROUTER_BASE =
 
 /** Fast free default — good for short spoken replies. */
 const DEFAULT_MODEL =
-  process.env.OPENROUTER_MODEL ?? 'openai/gpt-oss-20b:free';
+  process.env.OPENROUTER_MODEL ?? 'google/gemma-4-26b-a4b-it:free';
 
 const FALLBACK_MODELS = [
+  'openai/gpt-oss-20b:free',
   'inclusionai/ling-3.0-flash:free',
-  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-nano-9b-v2:free',
+  'openrouter/free',
 ];
 
 export class OpenRouterProvider implements AIProvider {
@@ -69,7 +71,7 @@ export class OpenRouterProvider implements AIProvider {
               content: m.content,
             })),
           }),
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(25_000),
         });
 
         if (!res.ok) {
@@ -78,6 +80,10 @@ export class OpenRouterProvider implements AIProvider {
           // Authentication / account failures won't improve on another model.
           if (res.status === 401 || res.status === 402 || res.status === 403) {
             break;
+          }
+          // Rate limit — brief pause then try next model.
+          if (res.status === 429) {
+            await new Promise((r) => setTimeout(r, 600));
           }
           continue;
         }

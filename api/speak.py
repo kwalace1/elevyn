@@ -14,8 +14,8 @@ import edge_tts
 
 
 VOICE = os.environ.get("ELEVYN_TTS_VOICE", "en-GB-SoniaNeural")
-RATE = os.environ.get("ELEVYN_TTS_RATE", "-4%")
-PITCH = os.environ.get("ELEVYN_TTS_PITCH", "-2Hz")
+RATE = os.environ.get("ELEVYN_TTS_RATE", "-2%")
+PITCH = os.environ.get("ELEVYN_TTS_PITCH", "+1Hz")
 
 
 async def synthesize(text: str, output: str) -> None:

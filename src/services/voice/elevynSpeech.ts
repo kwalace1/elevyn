@@ -1,11 +1,9 @@
 /**
  * Elevyn speech output.
- *
- * Desktop: neural British TTS (Edge Sonia) via /api/speak, chunked for speed.
- * iPad / iPhone (Safari + Chrome/WebKit): system speechSynthesis is primary —
- * HTML5/WebAudio MP3 often "plays" successfully but is silent (mute switch /
- * media session). Neural Sonia stays available via speakInGesture() for an
- * explicit Tap to hear control.
+ * Prefers neural British TTS (Edge Sonia) — human, feminine — via /api/speak,
+ * played sentence by sentence so long replies start fast and stop on interrupt.
+ * Falls back to a feminine browser voice only if Sonia fetch/play fails.
+ * On iPad, Tap to hear plays prefetched Sonia audio inside the user gesture.
  */
 
 import type { TextToSpeechService } from './synthesis';
@@ -73,6 +71,9 @@ export class ElevynSpeech implements TextToSpeechService {
   private raf = 0;
   private freqData: Uint8Array<ArrayBuffer> | null = null;
   private pulseActive = false;
+  /** Prefetched Sonia audio for Tap to hear (iOS gesture playback). */
+  private pendingBlobs: Blob[] = [];
+  private pendingText = '';
 
   get isAppleTouch(): boolean {
     return this.appleTouch;
@@ -141,18 +142,57 @@ export class ElevynSpeech implements TextToSpeechService {
 
   /**
    * Play a reply inside a fresh user gesture (Tap to hear).
-   * Uses system voice first on Apple; tries neural on desktop.
+   * Uses prefetched Sonia neural audio when available — that is the human
+   * feminine voice Elevyn should always sound like.
    */
   speakInGesture(
     text: string,
     opts: { onStart?: () => void; onEnd?: () => void } = {},
   ): void {
     this.unlock();
-    if (this.appleTouch) {
-      this.stop();
-      const session = this.session;
+    const trimmed = text.trim();
+    if (!trimmed) {
+      opts.onEnd?.();
+      return;
+    }
+
+    // Prefer already-fetched Sonia clips so play() stays in the tap stack.
+    const ready =
+      this.pendingText === trimmed && this.pendingBlobs.length > 0
+        ? [...this.pendingBlobs]
+        : null;
+
+    if (ready) {
+      void this.playPrepared(ready, opts);
+      return;
+    }
+
+    // Fetch Sonia then play — still better than robotic system TTS.
+    void this.speakAsync(trimmed, opts);
+  }
+
+  private async playPrepared(
+    blobs: Blob[],
+    opts: { onStart?: () => void; onEnd?: () => void },
+  ): Promise<void> {
+    this.stop();
+    const session = this.session;
+    let started = false;
+    try {
+      for (const blob of blobs) {
+        if (session !== this.session) return;
+        if (!started) {
+          started = true;
+          opts.onStart?.();
+        }
+        await this.playBlob(blob, session);
+        if (session !== this.session) return;
+      }
+      opts.onEnd?.();
+    } catch {
+      if (session !== this.session) return;
       this.fakeMeter({ free: true });
-      this.browserFallback.speak(text, {
+      this.browserFallback.speak(this.pendingText || '', {
         onStart: opts.onStart,
         onEnd: () => {
           this.stopMeter();
@@ -160,9 +200,7 @@ export class ElevynSpeech implements TextToSpeechService {
           if (session === this.session) opts.onEnd?.();
         },
       });
-      return;
     }
-    this.speak(text, opts);
   }
 
   stop(): void {
@@ -486,12 +524,10 @@ export class ElevynSpeech implements TextToSpeechService {
       });
     };
 
-    // iPad / iPhone: system voice only for auto-replies. Neural MP3 is often
-    // silently swallowed by the hardware mute switch / WebKit media rules.
-    if (this.appleTouch) {
-      speakBrowser(chunks.join(' '));
-      return;
-    }
+    // Always prefer Sonia neural — human, British, feminine.
+    // Prefetch every chunk so Tap to hear can play without another round-trip.
+    this.pendingText = trimmed;
+    this.pendingBlobs = [];
 
     let index = 0;
     try {
@@ -499,6 +535,7 @@ export class ElevynSpeech implements TextToSpeechService {
       for (index = 0; index < chunks.length; index++) {
         const blob = await nextFetch;
         if (session !== this.session) return;
+        this.pendingBlobs.push(blob);
         if (index + 1 < chunks.length) {
           nextFetch = this.fetchChunk(chunks[index + 1]);
         }
@@ -509,6 +546,12 @@ export class ElevynSpeech implements TextToSpeechService {
       opts.onEnd?.();
     } catch {
       if (session !== this.session) return;
+      // Playback blocked (common on iOS until Hear reply) — keep blobs for the tap.
+      if (this.pendingBlobs.length > 0 && this.appleTouch) {
+        // Soft system fallback so something is heard if mute isn't the issue.
+        speakBrowser(chunks.slice(index).join(' '));
+        return;
+      }
       speakBrowser(chunks.slice(index).join(' '));
     }
   }

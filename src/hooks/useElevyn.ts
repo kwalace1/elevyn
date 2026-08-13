@@ -670,7 +670,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const message =
           err instanceof Error ? err.message : 'Something went wrong.';
         setError(message);
-        speak('Pardon me — I lost that for a moment. Could you try again?', resumeWakeSoon);
+        speak('My connection flickered — could you say that again?', resumeWakeSoon);
       } finally {
         processingRef.current = false;
       }

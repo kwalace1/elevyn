@@ -144,28 +144,43 @@ export class ElevynBrain {
       )
       .join('\n');
 
-    try {
-      const contextBlock = (context ?? '').trim();
-      const userContent = contextBlock
-        ? `${contextBlock}\n\n=== REQUEST ===\n${trimmed}`
-        : trimmed;
+    const contextBlock = (context ?? '').trim();
+    const userContent = contextBlock
+      ? `${contextBlock}\n\n=== REQUEST ===\n${trimmed}`
+      : trimmed;
+    const messages = [
+      { role: 'system' as const, content: `${SYSTEM_PROMPT}\n\nCommands:\n${catalog}` },
+      { role: 'user' as const, content: userContent },
+    ];
 
-      const completion = await this.ai.complete({
-        messages: [
-          { role: 'system', content: `${SYSTEM_PROMPT}\n\nCommands:\n${catalog}` },
-          { role: 'user', content: userContent },
-        ],
+    const runOnce = () =>
+      this.ai.complete({
+        messages,
         temperature: 0.2,
         // Enough headroom that a JSON chat reply is never cut mid-string —
         // truncated JSON used to leak raw {"type":"chat"... to the user.
         maxTokens: 320,
       });
 
-      return this.parseModelIntent(completion.content, trimmed);
-    } catch {
+    try {
+      try {
+        const completion = await runOnce();
+        return this.parseModelIntent(completion.content, trimmed);
+      } catch (firstErr) {
+        // Free-tier OpenRouter flaps often — one quiet retry before giving up.
+        console.warn('[elevyn] AI complete failed, retrying once:', firstErr);
+        await new Promise((r) => setTimeout(r, 400));
+        const completion = await runOnce();
+        return this.parseModelIntent(completion.content, trimmed);
+      }
+    } catch (err) {
+      console.error('[elevyn] AI unavailable after retry:', err);
+      const local = this.matchLocalIntent(trimmed);
+      if (local) return local;
       return {
         type: 'chat',
-        reply: 'Pardon me — I had trouble with that. Could you try again?',
+        reply:
+          "My thinking link flickered for a second. Say that one more time?",
       };
     }
   }

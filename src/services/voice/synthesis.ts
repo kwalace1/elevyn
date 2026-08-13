@@ -12,35 +12,44 @@ export interface TextToSpeechService {
   unlock?(): void;
 }
 
-/** Ranked natural voice names available across macOS, Chrome, and Edge. */
+/** Ranked natural feminine voices — Elevyn should never sound male by default. */
 const VOICE_PREFERENCE = [
-  // macOS premium / enhanced voices. Quality wins over accent.
-  /daniel \(enhanced\)/i,
+  // macOS / iOS premium feminine.
+  /karen \(enhanced\)/i,
+  /moira \(enhanced\)/i,
+  /fiona \(enhanced\)/i,
   /kate \(enhanced\)/i,
   /serena \(enhanced\)/i,
   /martha \(enhanced\)/i,
-  /ava \(premium\)/i,
   /samantha \(enhanced\)/i,
+  /ava \(premium\)/i,
   /zoe \(premium\)/i,
   /allison \(enhanced\)/i,
-  /tom \(enhanced\)/i,
-  /ava/i,
   /samantha/i,
-  /daniel/i,
+  /karen/i,
+  /moira/i,
+  /fiona/i,
   /kate/i,
   /serena/i,
   /martha/i,
-  /arthur/i,
-  // Chrome / Edge cloud and natural voices.
+  /ava/i,
+  /zoe/i,
+  /allison/i,
+  /susan/i,
+  /victoria/i,
+  /tessa/i,
+  /nicky/i,
+  /flo/i,
+  // Chrome / Edge cloud feminine.
   /google uk english female/i,
-  /google uk english male/i,
-  /google us english/i,
-  /microsoft.*natural/i,
-  /microsoft.*online/i,
+  /google us english female/i,
+  /microsoft.*(sonia|libby|jenny|aria|sara|zira)/i,
   /en-gb-.*neural/i,
   /en-us-.*neural/i,
-  /british/i,
+  /british.*female/i,
 ];
+
+const MALE_VOICE = /\b(daniel|david|tom|fred|alex|jorge|diego|aaron|arthur|ryan|guy|davis|tony|rishi|reed)\b/i;
 
 function scoreVoice(voice: SpeechSynthesisVoice): number {
   const name = voice.name;
@@ -52,6 +61,9 @@ function scoreVoice(voice: SpeechSynthesisVoice): number {
   else if (lang.startsWith('en')) score += 25;
   else return -1;
 
+  // Never pick a clearly male system voice for Elevyn.
+  if (MALE_VOICE.test(name)) score -= 400;
+
   for (let i = 0; i < VOICE_PREFERENCE.length; i += 1) {
     if (VOICE_PREFERENCE[i].test(name)) {
       score += 300 - i * 4;
@@ -61,6 +73,8 @@ function scoreVoice(voice: SpeechSynthesisVoice): number {
 
   if (/enhanced|premium|neural|natural|siri/i.test(name)) score += 120;
   if (/compact|eloquence|novelty|whisper|zarvox/i.test(name)) score -= 120;
+  if (/\bfemale\b/i.test(name)) score += 80;
+  if (/\bmale\b/i.test(name)) score -= 200;
   if (voice.default) score += 8;
   if (voice.localService) score += 10;
 
@@ -163,8 +177,9 @@ export class BrowserTextToSpeech implements TextToSpeechService {
 
       const utterance = new SpeechSynthesisUtterance(humanizeForSpeech(text));
       utterance.lang = 'en-GB';
-      utterance.rate = 0.96;
-      utterance.pitch = 1;
+      // Slightly warmer / brighter for a more feminine presence on system TTS.
+      utterance.rate = this.appleTouch ? 0.98 : 0.96;
+      utterance.pitch = this.appleTouch ? 1.08 : 1.02;
       utterance.volume = 1;
 
       const voice = this.resolveVoice();
