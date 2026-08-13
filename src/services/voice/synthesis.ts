@@ -8,6 +8,8 @@ export interface TextToSpeechService {
   readonly supported: boolean;
   speak(text: string, opts?: { onStart?: () => void; onEnd?: () => void }): void;
   stop(): void;
+  /** Call from a user gesture (mic tap) so iOS allows later Audio.play / TTS. */
+  unlock?(): void;
 }
 
 /** Ranked natural voice names available across macOS, Chrome, and Edge. */
@@ -94,11 +96,27 @@ export class BrowserTextToSpeech implements TextToSpeechService {
   readonly supported: boolean;
   private cachedVoice: SpeechSynthesisVoice | null = null;
   private voicesReady = false;
+  private readonly appleTouch = isAppleTouchDevice();
 
   constructor() {
     this.supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
     if (this.supported) {
       this.warmVoices();
+    }
+  }
+
+  /** Call from a tap so iOS allows later speechSynthesis.speak(). */
+  unlock(): void {
+    if (!this.supported) return;
+    try {
+      window.speechSynthesis.cancel();
+      const warm = new SpeechSynthesisUtterance(' ');
+      warm.volume = 0;
+      warm.rate = 2;
+      window.speechSynthesis.speak(warm);
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
     }
   }
 
@@ -166,24 +184,26 @@ export class BrowserTextToSpeech implements TextToSpeechService {
 
       window.speechSynthesis.speak(utterance);
 
-      // Safari/Chrome quirk: keep the synth awake for longer utterances.
-      const keepAlive = window.setInterval(() => {
-        if (!window.speechSynthesis.speaking) {
-          window.clearInterval(keepAlive);
-          return;
-        }
-        window.speechSynthesis.pause();
-        window.speechSynthesis.resume();
-      }, 8_000);
+      // Chrome quirk only — pause/resume keepAlive cancels speech on iOS Safari.
+      if (!this.appleTouch) {
+        const keepAlive = window.setInterval(() => {
+          if (!window.speechSynthesis.speaking) {
+            window.clearInterval(keepAlive);
+            return;
+          }
+          window.speechSynthesis.pause();
+          window.speechSynthesis.resume();
+        }, 8_000);
 
-      utterance.onend = () => {
-        window.clearInterval(keepAlive);
-        finish();
-      };
-      utterance.onerror = () => {
-        window.clearInterval(keepAlive);
-        finish();
-      };
+        utterance.onend = () => {
+          window.clearInterval(keepAlive);
+          finish();
+        };
+        utterance.onerror = () => {
+          window.clearInterval(keepAlive);
+          finish();
+        };
+      }
     };
 
     // Allow voice list to populate on first utterance.
@@ -192,10 +212,18 @@ export class BrowserTextToSpeech implements TextToSpeechService {
       return;
     }
 
-    window.setTimeout(speakNow, 20);
+    // On Apple, speak sooner — delay can drop the gesture/unlock chain.
+    window.setTimeout(speakNow, this.appleTouch ? 0 : 20);
   }
 
   stop(): void {
     if (this.supported) window.speechSynthesis.cancel();
   }
+}
+
+function isAppleTouchDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
 }

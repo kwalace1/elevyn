@@ -1181,6 +1181,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   }, [clearCommandTimeout, clearWakeCommit, resumeWakeSoon]);
 
   const toggleArmed = useCallback(() => {
+    // iPad: unlock TTS inside the tap so later async replies can speak.
+    ttsRef.current.unlock();
     setArmed((prev) => {
       const next = !prev;
       if (!next) {
@@ -1211,6 +1213,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       setState('offline');
       return;
     }
+    // iPad / iOS: Audio.play after /api/interpret needs a prior gesture unlock.
+    ttsRef.current.unlock();
     ttsRef.current.stop();
     enterCommandMode();
   }, [brainOnline, enterCommandMode]);

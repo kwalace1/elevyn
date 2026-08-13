@@ -4,6 +4,10 @@
  * sentence so long replies start fast and stop the instant Kevin interrupts.
  * Falls back to browser speechSynthesis if the TTS endpoint fails.
  * Exposes a live amplitude level so the orb can react while speaking.
+ *
+ * iPad / iOS: audio must be unlocked during a tap (mic). MediaElementSource
+ * metering is skipped on Apple touch devices — routing through a suspended
+ * AudioContext was silencing playback even when play() succeeded.
  */
 
 import type { TextToSpeechService } from './synthesis';
@@ -50,13 +54,28 @@ function chunkText(text: string): string[] {
   return chunks.length ? chunks : [humanizeForSpeech(text)];
 }
 
+/** iPhone / iPad (incl. desktop-mode iPadOS). */
+function isAppleTouchDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  // iPadOS 13+ may report as MacIntel with touch.
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+}
+
+/** Tiny silent WAV — unlocks HTMLAudioElement during a user gesture. */
+const SILENT_WAV =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+
 export class ElevynSpeech implements TextToSpeechService {
   readonly supported = true;
   private readonly browserFallback = new BrowserTextToSpeech();
+  private readonly appleTouch = isAppleTouchDevice();
   private currentAudio: HTMLAudioElement | null = null;
   private objectUrl: string | null = null;
   /** Bumps on every speak/stop so a stale chunk loop can never keep playing. */
   private session = 0;
+  private unlocked = false;
 
   private audioCtx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -70,6 +89,34 @@ export class ElevynSpeech implements TextToSpeechService {
   subscribeLevel(listener: (level: number) => void): () => void {
     this.levelListeners.add(listener);
     return () => this.levelListeners.delete(listener);
+  }
+
+  /**
+   * Must run inside a tap/click (mic button, enable wake).
+   * iOS Safari otherwise rejects Audio.play() after async /api/interpret.
+   */
+  unlock(): void {
+    this.unlocked = true;
+    this.browserFallback.unlock();
+    const ctx = this.ensureContext();
+    if (ctx?.state === 'suspended') {
+      void ctx.resume();
+    }
+    try {
+      const silent = new Audio(SILENT_WAV);
+      silent.volume = 0.01;
+      void silent
+        .play()
+        .then(() => {
+          silent.pause();
+          silent.src = '';
+        })
+        .catch(() => {
+          // Still mark unlocked — speechSynthesis may work after the tap.
+        });
+    } catch {
+      // ignore
+    }
   }
 
   speak(
@@ -134,8 +181,17 @@ export class ElevynSpeech implements TextToSpeechService {
 
   private startMeter(audio: HTMLAudioElement): void {
     this.stopMeter();
+    // Apple WebKit: MediaElementSource steals element output into AudioContext.
+    // If the context is suspended (common after async replies), playback is silent.
+    if (this.appleTouch) {
+      this.fakeMeter();
+      return;
+    }
     const ctx = this.ensureContext();
-    if (!ctx) return;
+    if (!ctx) {
+      this.fakeMeter();
+      return;
+    }
     try {
       const source = ctx.createMediaElementSource(audio);
       const analyser = ctx.createAnalyser();
@@ -230,6 +286,9 @@ export class ElevynSpeech implements TextToSpeechService {
       const url = URL.createObjectURL(blob);
       this.objectUrl = url;
       const audio = new Audio(url);
+      // iOS often needs playsInline for programmatic playback.
+      audio.setAttribute('playsinline', 'true');
+      (audio as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
       this.currentAudio = audio;
       this.startMeter(audio);
 
@@ -255,13 +314,23 @@ export class ElevynSpeech implements TextToSpeechService {
         reject(new Error('audio playback failed'));
       };
 
-      audio.play().catch((err) => {
-        window.clearTimeout(watchdog);
-        this.stopMeter();
-        this.emitLevel(0);
-        this.cleanup();
-        reject(err instanceof Error ? err : new Error('audio play rejected'));
-      });
+      const play = () => {
+        audio.play().catch((err) => {
+          window.clearTimeout(watchdog);
+          this.stopMeter();
+          this.emitLevel(0);
+          this.cleanup();
+          reject(err instanceof Error ? err : new Error('audio play rejected'));
+        });
+      };
+
+      // If still locked, try resume context then play (may still fail → browser TTS).
+      const ctx = this.audioCtx;
+      if (ctx?.state === 'suspended') {
+        void ctx.resume().finally(play);
+      } else {
+        play();
+      }
     });
   }
 
@@ -287,6 +356,26 @@ export class ElevynSpeech implements TextToSpeechService {
       }
     };
 
+    const speakBrowser = (remainder: string) => {
+      this.fakeMeter({ free: true });
+      this.browserFallback.speak(remainder, {
+        onStart: markStart,
+        onEnd: () => {
+          this.stopMeter();
+          this.emitLevel(0);
+          if (session !== this.session) return;
+          opts.onEnd?.();
+        },
+      });
+    };
+
+    // On Apple touch, if never unlocked, skip neural fetch and use system voice
+    // (still may be quiet until mic tap — unlock() fixes that).
+    if (this.appleTouch && !this.unlocked) {
+      speakBrowser(chunks.join(' '));
+      return;
+    }
+
     let index = 0;
     try {
       // Prefetch pipeline: fetch the next chunk while the current one plays.
@@ -304,17 +393,8 @@ export class ElevynSpeech implements TextToSpeechService {
       opts.onEnd?.();
     } catch {
       if (session !== this.session) return;
-      // Neural voice unavailable — finish what's left with the browser voice.
-      this.fakeMeter({ free: true });
-      this.browserFallback.speak(chunks.slice(index).join(' '), {
-        onStart: markStart,
-        onEnd: () => {
-          this.stopMeter();
-          this.emitLevel(0);
-          if (session !== this.session) return;
-          opts.onEnd?.();
-        },
-      });
+      // Neural voice unavailable / iOS blocked play — finish with browser voice.
+      speakBrowser(chunks.slice(index).join(' '));
     }
   }
 
