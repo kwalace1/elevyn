@@ -66,7 +66,6 @@ export class ElevynSpeech implements TextToSpeechService {
   private player: HTMLAudioElement | null = null;
   private objectUrl: string | null = null;
   private session = 0;
-  private unlocked = false;
   private bufferSource: AudioBufferSourceNode | null = null;
   private audioCtx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -90,7 +89,6 @@ export class ElevynSpeech implements TextToSpeechService {
    * so iOS enters an active media session.
    */
   unlock(): void {
-    this.unlocked = true;
     this.browserFallback.unlock();
 
     const ctx = this.ensureContext();
