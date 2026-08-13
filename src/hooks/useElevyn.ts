@@ -24,6 +24,7 @@ import {
   matchCaptureShortcut,
 } from '../utils/wakeWord';
 import { safeSpeakReply } from '../utils/spokenReply';
+import type { PersonRecord } from '../utils/peopleMemory';
 
 type ListenPhase = 'wake' | 'command';
 
@@ -247,6 +248,22 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     [],
   );
 
+  const applyLearnPerson = useCallback((args?: Record<string, unknown>) => {
+    const raw = args?.learnPerson;
+    if (!raw || typeof raw !== 'object') return;
+    const rec = raw as PersonRecord;
+    if (typeof rec.name !== 'string' || !rec.name.trim()) return;
+    durableRef.current.upsertPerson({
+      name: rec.name.trim(),
+      email:
+        typeof rec.email === 'string' && rec.email.includes('@')
+          ? rec.email.trim().toLowerCase()
+          : undefined,
+      role: typeof rec.role === 'string' ? rec.role : undefined,
+    });
+    setMemoryEpoch((n) => n + 1);
+  }, []);
+
   const runAgentPlan = useCallback(
     async (plan: AgentPlan, depth = 0): Promise<string> => {
       if (depth > 2) return 'Plan stopped — too many nested steps.';
@@ -338,6 +355,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
                 durableRef.current.addFact(durableFact);
                 setMemoryEpoch((n) => n + 1);
               }
+              applyLearnPerson(intent.args);
               const scheduleUtterance = intent.args?.scheduleUtterance;
               if (typeof scheduleUtterance === 'string') {
                 const parsed = parseSpokenAgenda(scheduleUtterance);
@@ -391,7 +409,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       }
       return `Done. ${doneCount} step${doneCount === 1 ? '' : 's'} complete.`;
     },
-    [effectHooks, publishAgentPanel],
+    [applyLearnPerson, effectHooks, publishAgentPanel],
   );
 
   const processUtterance = useCallback(
@@ -491,6 +509,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           durableRef.current.addFact(durableFact);
           setMemoryEpoch((n) => n + 1);
         }
+        applyLearnPerson(intent.args);
 
         // Voice-scheduled agenda item.
         const scheduleUtterance = intent.args?.scheduleUtterance;
@@ -609,6 +628,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       }
     },
     [
+      applyLearnPerson,
       clearCommandDebounce,
       clearCommandTimeout,
       clearWakeCommit,

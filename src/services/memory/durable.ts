@@ -4,9 +4,18 @@
  * store until a cloud vault is worth the complexity.
  */
 
+import {
+  findPersonInMemory,
+  formatPeopleBlock,
+  mergePerson,
+  parsePersonFact,
+  type PersonRecord,
+} from '../../utils/peopleMemory';
+
 const STORAGE_KEY = 'elevyn.durable.v1';
 const MAX_FACTS = 120;
 const MAX_EVENTS = 80;
+const MAX_PEOPLE = 60;
 
 export type DurableKind = 'fact' | 'person' | 'preference' | 'project';
 
@@ -31,6 +40,8 @@ export interface AgendaEvent {
 export interface DurableSnapshot {
   facts: DurableFact[];
   events: AgendaEvent[];
+  /** Structured people directory (Phase 3). Older snapshots omit this. */
+  people?: PersonRecord[];
 }
 
 function uid(): string {
@@ -38,7 +49,7 @@ function uid(): string {
 }
 
 function empty(): DurableSnapshot {
-  return { facts: [], events: [] };
+  return { facts: [], events: [], people: [] };
 }
 
 function load(): DurableSnapshot {
@@ -49,13 +60,33 @@ function load(): DurableSnapshot {
     if (!parsed || !Array.isArray(parsed.facts) || !Array.isArray(parsed.events)) {
       return empty();
     }
+    const people = Array.isArray(parsed.people)
+      ? parsed.people.slice(0, MAX_PEOPLE)
+      : hydratePeopleFromFacts(parsed.facts);
     return {
       facts: parsed.facts.slice(0, MAX_FACTS),
       events: prunePastEvents(parsed.events).slice(0, MAX_EVENTS),
+      people,
     };
   } catch {
     return empty();
   }
+}
+
+/** Backfill structured people from older freeform [person] facts. */
+function hydratePeopleFromFacts(facts: DurableFact[]): PersonRecord[] {
+  const people: PersonRecord[] = [];
+  for (const f of facts) {
+    if (f.kind !== 'person') continue;
+    const parsed = parsePersonFact(f.content);
+    if (!parsed) continue;
+    const idx = people.findIndex(
+      (p) => p.name.toLowerCase() === parsed.name.toLowerCase(),
+    );
+    if (idx >= 0) people[idx] = mergePerson(people[idx], parsed);
+    else people.push(parsed);
+  }
+  return people.slice(0, MAX_PEOPLE);
 }
 
 function save(state: DurableSnapshot): void {
@@ -76,6 +107,7 @@ function prunePastEvents(events: AgendaEvent[]): AgendaEvent[] {
 }
 
 function inferKind(content: string): DurableKind {
+  if (parsePersonFact(content)) return 'person';
   const lower = content.toLowerCase();
   if (/\b(prefer|preference|always|never|usually|don'?t like)\b/.test(lower)) {
     return 'preference';
@@ -87,12 +119,21 @@ function inferKind(content: string): DurableKind {
     /\b(met|meeting|said|told|from|with)\b/.test(lower) ||
     /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/.test(content)
   ) {
-    // "Sarah said…" / "Alex from Acme…"
-    if (/\b(said|told|from|called|email|pricing|deal|client|investor)\b/i.test(content)) {
+    if (
+      /\b(said|told|from|called|email|pricing|deal|client|investor)\b/i.test(
+        content,
+      )
+    ) {
       return 'person';
     }
   }
   return 'fact';
+}
+
+function personFactLine(person: PersonRecord): string {
+  const email = person.email ? ` <${person.email}>` : '';
+  const role = person.role ? ` — ${person.role}` : '';
+  return `${person.name}${email}${role}`.trim();
 }
 
 export class DurableMemory {
@@ -106,12 +147,71 @@ export class DurableMemory {
     return {
       facts: [...this.state.facts],
       events: [...this.state.events],
+      people: [...(this.state.people ?? [])],
     };
+  }
+
+  listPeople(): PersonRecord[] {
+    return [...(this.state.people ?? [])];
+  }
+
+  findPerson(who: string): PersonRecord | null {
+    return findPersonInMemory(this.state.people ?? [], who);
+  }
+
+  upsertPerson(incoming: PersonRecord): PersonRecord {
+    const people = [...(this.state.people ?? [])];
+    const idx = people.findIndex(
+      (p) => p.name.toLowerCase() === incoming.name.toLowerCase(),
+    );
+    const merged =
+      idx >= 0 ? mergePerson(people[idx], incoming) : { ...incoming };
+    if (idx >= 0) people[idx] = merged;
+    else people.unshift(merged);
+
+    const line = personFactLine(merged);
+    const now = new Date().toISOString();
+    const withoutDup = this.state.facts.filter(
+      (f) =>
+        !(
+          f.kind === 'person' &&
+          f.content.toLowerCase().includes(merged.name.toLowerCase())
+        ),
+    );
+    const entry: DurableFact = {
+      id: uid(),
+      kind: 'person',
+      content: line,
+      tags: ['voice', 'person'],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.state = {
+      ...this.state,
+      people: people.slice(0, MAX_PEOPLE),
+      facts: [entry, ...withoutDup].slice(0, MAX_FACTS),
+    };
+    save(this.state);
+    return merged;
   }
 
   addFact(content: string, kind?: DurableKind): DurableFact | null {
     const cleaned = content.replace(/\s+/g, ' ').trim();
     if (!cleaned) return null;
+
+    const parsed = parsePersonFact(cleaned);
+    if (parsed && (kind === 'person' || kind === undefined || parsed.email)) {
+      this.upsertPerson(parsed);
+      const saved = this.findPerson(parsed.name);
+      const line = personFactLine(saved ?? parsed);
+      return (
+        this.state.facts.find(
+          (f) => f.kind === 'person' && f.content === line,
+        ) ?? null
+      );
+    }
+
     const now = new Date().toISOString();
     const withoutDup = this.state.facts.filter(
       (f) => f.content.toLowerCase() !== cleaned.toLowerCase(),
@@ -147,7 +247,6 @@ export class DurableMemory {
       id: uid(),
       createdAt: new Date().toISOString(),
     };
-    // Replace same-title same-day voice events to avoid duplicates.
     const day = event.start.slice(0, 10);
     const filtered = this.state.events.filter((e) => {
       if (e.source === 'calendar') return true;
@@ -164,8 +263,9 @@ export class DurableMemory {
     return event;
   }
 
-  /** Merge remote calendar events (ICS) without wiping voice-added ones. */
-  mergeCalendarEvents(remote: Omit<AgendaEvent, 'id' | 'createdAt' | 'source'>[]): void {
+  mergeCalendarEvents(
+    remote: Omit<AgendaEvent, 'id' | 'createdAt' | 'source'>[],
+  ): void {
     const voice = this.state.events.filter((e) => e.source === 'voice');
     const mapped: AgendaEvent[] = remote.map((e) => ({
       ...e,
@@ -193,7 +293,7 @@ export class DurableMemory {
   }
 
   clearFacts(): void {
-    this.state = { ...this.state, facts: [] };
+    this.state = { ...this.state, facts: [], people: [] };
     save(this.state);
   }
 
@@ -202,10 +302,15 @@ export class DurableMemory {
     save(this.state);
   }
 
-  /** Context block for the brain. */
   toContextBlock(timeZone = 'America/New_York'): string | undefined {
     const parts: string[] = [];
-    const facts = this.state.facts.slice(0, 24);
+
+    const peopleBlock = formatPeopleBlock(this.state.people ?? []);
+    if (peopleBlock) parts.push(peopleBlock);
+
+    const facts = this.state.facts
+      .filter((f) => f.kind !== 'person')
+      .slice(0, 24);
     if (facts.length) {
       parts.push(
         '=== DURABLE MEMORY ===\n' +

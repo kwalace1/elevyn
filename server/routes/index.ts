@@ -329,6 +329,7 @@ export function createAiRouter(
                 endIso: parsedSchedule.endIso,
               }
             : null,
+          context,
         );
         if (writeIntent) {
           res.json({ intent: writeIntent, execution: null });
@@ -471,6 +472,7 @@ export function createAiRouter(
             startIso: parsed.startIso,
             endIso: parsed.endIso,
           },
+          context,
         );
         if (mirrored?.reply) {
           intent.reply = mirrored.reply;

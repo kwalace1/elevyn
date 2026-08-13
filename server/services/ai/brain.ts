@@ -21,6 +21,7 @@ import {
   sanitizeSpokenReply,
   UNSURE_REPLY,
 } from '../../../src/utils/spokenReply.js';
+import { parsePersonFact } from '../../../src/utils/peopleMemory.js';
 
 /** Kevin's timezone — Vercel functions run in UTC, so never trust server local time. */
 const TIME_ZONE = process.env.ELEVYN_TZ ?? 'America/New_York';
@@ -41,8 +42,8 @@ Confirmations may vary: "Certainly.", "Of course.", "Right away.", "Noted.", "Un
 You may use "sir" sparingly for flavour — not every reply, never stacked.
 Never sound like a chatbot: no "Happy to help!", "Great question!", "Absolutely!", "Let me know if you need anything else."
 Prefer warm brevity over corporate cheer. Avoid slang, markdown, bullet lists, and emoji.
-Use SESSION FACTS, DURABLE MEMORY, TODAY'S AGENDA, and MICROSOFT 365 blocks when present (Outlook mail, Teams chats, calendar). Prefer on-screen panels when he refers to "that", "this", or the meeting.
-Answer "what's next" / "am I free" / calendar questions from the agenda or Microsoft calendar context. Treat durable memory as long-term knowledge about Kevin's work and people.
+Use SESSION FACTS, DURABLE MEMORY, PEOPLE, TODAY'S AGENDA, and MICROSOFT 365 blocks when present (Outlook mail, Teams chats, calendar). Prefer on-screen panels when he refers to "that", "this", or the meeting.
+Answer "what's next" / "am I free" / calendar questions from the agenda or Microsoft calendar context. Treat PEOPLE and durable memory as long-term knowledge about Kevin's work and contacts — use remembered emails when he says “email Sarah”.
 When MICROSOFT 365 context is present, weave unread mail and Teams into catch-me-up briefly — do not invent messages.
 Kevin may ask you to email, Teams-message, or schedule on Outlook — the server handles those write actions; prefer confirming facts you know.
 
@@ -242,7 +243,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Say “catch me up” for the day board, “prep me for the next meeting”, or “wrap up the meeting and draft a follow-up”. Chain requests with "and then", or say "plan my afternoon".',
+          'I am your sidekick. Ask me anything, remember people and facts across days, take notes and tasks, run timers, and capture meetings. Say “catch me up” for the day board, “prep me for the next meeting”, or “wrap up the meeting and draft a follow-up”. Remember contacts with “remember Sarah’s email is …”.',
       };
     }
 
@@ -634,13 +635,16 @@ export class ElevynBrain {
       if (!content) {
         return { type: 'chat', reply: 'What should I remember?' };
       }
+      const person = parsePersonFact(content);
       if (this.memory) {
         try {
           await this.memory.create({
-            category: 'notes',
+            category: person ? 'personal' : 'notes',
             title: content.split(/\s+/).slice(0, 6).join(' '),
             content,
-            tags: ['voice', 'session'],
+            tags: person
+              ? ['voice', 'person', person.name]
+              : ['voice', 'session'],
           });
         } catch {
           // Best-effort durable write.
@@ -648,7 +652,11 @@ export class ElevynBrain {
       }
       return {
         type: 'chat',
-        reply: "Certainly. I'll remember that.",
+        reply: person
+          ? person.email
+            ? `Certainly. I'll remember ${person.name}'s email.`
+            : `Certainly. I'll remember ${person.name}.`
+          : "Certainly. I'll remember that.",
         args: { sessionFact: content, durableFact: content },
       };
     }
@@ -1065,9 +1073,20 @@ function agendaReply(context: string, askingIfFree: boolean): string {
 }
 
 function findDurableFact(context: string, query: string): string | null {
+  const needle = query.toLowerCase();
+
+  const people = extractSection(context, '=== PEOPLE ===');
+  if (people) {
+    const hits = people
+      .split('\n')
+      .map((l) => l.replace(/^-+\s*/, '').trim())
+      .filter(Boolean);
+    const hit = hits.find((f) => f.toLowerCase().includes(needle));
+    if (hit) return hit;
+  }
+
   const block = extractSection(context, '=== DURABLE MEMORY ===');
   if (!block) return null;
-  const needle = query.toLowerCase();
   const facts = block
     .split('\n')
     .map((l) => l.replace(/^-+\s*(?:\[[^\]]+\]\s*)?/, '').trim())

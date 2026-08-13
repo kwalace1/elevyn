@@ -10,6 +10,7 @@ import {
   findTeamsChat,
   sendMail,
   sendTeamsMessage,
+  type GraphPerson,
 } from './graph.js';
 import {
   createTodoTask,
@@ -26,6 +27,10 @@ import {
   speakRooms,
   speakTodoBrief,
 } from './extras.js';
+import {
+  findPersonInMemory,
+  parsePeopleFromContext,
+} from '../../../src/utils/peopleMemory.js';
 
 export type PendingMsAction =
   | {
@@ -53,9 +58,41 @@ type PendingEntry = { action: PendingMsAction; expires: number };
 
 const pendingByKey = new Map<string, PendingEntry>();
 const PENDING_TTL_MS = 120_000;
+const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 function pendingKey(account?: string | null): string {
   return (account ?? 'default').toLowerCase();
+}
+
+function learnPersonArgs(person: GraphPerson): Record<string, unknown> {
+  return {
+    learnPerson: { name: person.name, email: person.email },
+  };
+}
+
+/** Prefer durable people memory, then Graph directory. */
+async function resolvePerson(
+  accessToken: string,
+  who: string,
+  context?: string,
+): Promise<GraphPerson | null> {
+  const trimmed = who.trim();
+  if (!trimmed) return null;
+
+  if (EMAIL_RE.test(trimmed)) {
+    return { name: trimmed.split('@')[0] ?? trimmed, email: trimmed.toLowerCase() };
+  }
+
+  const remembered = findPersonInMemory(
+    parsePeopleFromContext(context),
+    trimmed,
+  );
+  if (remembered?.email) {
+    return { name: remembered.name, email: remembered.email };
+  }
+
+  const graphName = remembered?.name ?? trimmed;
+  return findPerson(accessToken, graphName);
 }
 
 export function setPendingMsAction(
@@ -149,6 +186,7 @@ export async function tryMicrosoftWriteIntent(
     startIso: string;
     endIso: string;
   } | null,
+  context?: string,
 ): Promise<InterpretedIntent | null> {
   const original = utterance.trim();
   const lower = original.toLowerCase();
@@ -258,14 +296,52 @@ export async function tryMicrosoftWriteIntent(
       .trim();
     if (who.length >= 2) {
       try {
-        const hits = await searchContacts(accessToken, who);
-        if (!hits.length) {
+        const remembered = findPersonInMemory(
+          parsePeopleFromContext(context),
+          who,
+        );
+        if (remembered) {
           return {
             type: 'chat',
-            reply: `No Outlook contact matched ${who}.`,
+            reply: speakContact({
+              name: remembered.name,
+              email: remembered.email,
+            }),
+            args: remembered.email
+              ? learnPersonArgs({
+                  name: remembered.name,
+                  email: remembered.email,
+                })
+              : undefined,
           };
         }
-        return { type: 'chat', reply: speakContact(hits[0]) };
+        const hits = await searchContacts(accessToken, who);
+        if (!hits.length) {
+          const graphPerson = await resolvePerson(accessToken, who, context);
+          if (graphPerson) {
+            return {
+              type: 'chat',
+              reply: speakContact({
+                name: graphPerson.name,
+                email: graphPerson.email,
+              }),
+              args: learnPersonArgs(graphPerson),
+            };
+          }
+          return {
+            type: 'chat',
+            reply: `No contact matched ${who}. Say “remember ${who}'s email is …” and I will keep it.`,
+          };
+        }
+        const hit = hits[0];
+        return {
+          type: 'chat',
+          reply: speakContact(hit),
+          args:
+            hit.email
+              ? learnPersonArgs({ name: hit.name, email: hit.email })
+              : undefined,
+        };
       } catch {
         return {
           type: 'chat',
@@ -286,15 +362,19 @@ export async function tryMicrosoftWriteIntent(
   if (presenceMatch?.[1]) {
     const who = presenceMatch[1].replace(/\b(?:the|a)\s+/gi, '').trim();
     try {
-      const person = await findPerson(accessToken, who);
+      const person = await resolvePerson(accessToken, who, context);
       if (!person) {
         return {
           type: 'chat',
-          reply: `I could not find ${who} to check presence.`,
+          reply: `I could not find ${who} to check presence. Say “remember ${who}'s email is …” if you know it.`,
         };
       }
       const status = await getPresenceForUser(accessToken, person.email);
-      return { type: 'chat', reply: `${person.name} looks ${status}.` };
+      return {
+        type: 'chat',
+        reply: `${person.name} looks ${status}.`,
+        args: learnPersonArgs(person),
+      };
     } catch {
       return {
         type: 'chat',
@@ -432,7 +512,11 @@ export async function tryMicrosoftWriteIntent(
     let attendeeEmails: string[] = [];
     let whoLabel = '';
     if (withPerson?.[1]) {
-      const person = await findPerson(accessToken, withPerson[1].trim());
+      const person = await resolvePerson(
+        accessToken,
+        withPerson[1].trim(),
+        context,
+      );
       if (person) {
         attendeeEmails = [person.email];
         whoLabel = person.name;
@@ -458,7 +542,12 @@ export async function tryMicrosoftWriteIntent(
       return {
         type: 'chat',
         reply: `On your Outlook calendar: ${schedule.title} at ${when}.${invite}${teams}`,
-        args: { scheduleUtterance: original },
+        args: {
+          scheduleUtterance: original,
+          ...(whoLabel && attendeeEmails[0]
+            ? learnPersonArgs({ name: whoLabel, email: attendeeEmails[0] })
+            : {}),
+        },
       };
     } catch {
       return {
@@ -487,11 +576,11 @@ export async function tryMicrosoftWriteIntent(
         reply: 'Who should I email, and what should it say?',
       };
     }
-    const person = await findPerson(accessToken, who);
+    const person = await resolvePerson(accessToken, who, context);
     if (!person) {
       return {
         type: 'chat',
-        reply: `I could not find ${who} in your Microsoft directory. Try a full name or email address.`,
+        reply: `I couldn't find ${who}. Say “remember ${who}'s email is …” or try a full name.`,
       };
     }
     const subject =
@@ -508,6 +597,7 @@ export async function tryMicrosoftWriteIntent(
     return {
       type: 'chat',
       reply: `I'll email ${person.name}: ${body}. Say “send it” to confirm, or “cancel”.`,
+      args: learnPersonArgs(person),
     };
   }
 
@@ -529,10 +619,21 @@ export async function tryMicrosoftWriteIntent(
         reply: 'Who on Teams, and what should I say?',
       };
     }
-    let chat = await findTeamsChat(accessToken, who);
+    const remembered = findPersonInMemory(
+      parsePeopleFromContext(context),
+      who,
+    );
+    let chat = await findTeamsChat(
+      accessToken,
+      remembered?.name ?? who,
+    );
+    let learned: GraphPerson | null = null;
     if (!chat) {
-      const person = await findPerson(accessToken, who);
-      if (person) chat = await findTeamsChat(accessToken, person.name);
+      const person = await resolvePerson(accessToken, who, context);
+      if (person) {
+        learned = person;
+        chat = await findTeamsChat(accessToken, person.name);
+      }
     }
     if (!chat) {
       return {
@@ -549,6 +650,7 @@ export async function tryMicrosoftWriteIntent(
     return {
       type: 'chat',
       reply: `I'll message ${chat.title} on Teams: ${message}. Say “send it” to confirm, or “cancel”.`,
+      args: learned ? learnPersonArgs(learned) : undefined,
     };
   }
 
