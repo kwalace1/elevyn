@@ -15,6 +15,8 @@ interface FocusOverlayProps {
   clock?: string;
   hearAvailable?: boolean;
   onHearReply?: () => void;
+  micNeedsGesture?: boolean;
+  onResumeMic?: () => void;
   onExit: () => void;
   onDismissPanel: (id: string) => void;
   onToggleItem: (panelId: string, itemId: string) => void;
@@ -56,6 +58,8 @@ export function FocusOverlay({
   clock,
   hearAvailable,
   onHearReply,
+  micNeedsGesture,
+  onResumeMic,
   onExit: _onExit,
   onDismissPanel,
   onToggleItem,
@@ -156,6 +160,11 @@ export function FocusOverlay({
             {hearAvailable && onHearReply && response ? (
               <button type="button" className="mic-hear focus__hear" onClick={onHearReply}>
                 Hear reply
+              </button>
+            ) : null}
+            {micNeedsGesture && onResumeMic ? (
+              <button type="button" className="mic-hear focus__resume" onClick={onResumeMic}>
+                Tap to resume listening
               </button>
             ) : null}
           </div>
@@ -280,6 +289,11 @@ export function FocusOverlay({
           {hearAvailable && onHearReply && response ? (
             <button type="button" className="mic-hear focus__hear" onClick={onHearReply}>
               Hear reply
+            </button>
+          ) : null}
+          {micNeedsGesture && onResumeMic ? (
+            <button type="button" className="mic-hear focus__resume" onClick={onResumeMic}>
+              Tap to resume listening
             </button>
           ) : null}
         </div>

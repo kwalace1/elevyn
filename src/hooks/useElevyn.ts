@@ -63,6 +63,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const [voiceLevel, setVoiceLevel] = useState(0);
   /** iPad: show Tap to hear when auto speech may be silent. */
   const [hearAvailable, setHearAvailable] = useState(false);
+  /**
+   * After OAuth / cold load, browsers block SpeechRecognition until a tap.
+   * Keep armed — ask Kevin to tap the mic instead of silently dying.
+   */
+  const [micNeedsGesture, setMicNeedsGesture] = useState(false);
+  const pendingMsConnectedRef = useRef(false);
 
   const recognitionRef = useRef(new BrowserSpeechRecognition());
   const ttsRef = useRef(new ElevynSpeech());
@@ -336,7 +342,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
     ].filter(Boolean);
     return contextParts.length
-      ? contextParts.join('\n\n').slice(0, 7500)
+      ? contextParts.join('\n\n').slice(0, 4200)
       : undefined;
   }, []);
 
@@ -454,7 +460,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           );
           publishAgentPanel(plan.title, steps, agentId);
           // Brief beat so the glass update is readable.
-          await new Promise((r) => window.setTimeout(r, 280));
+          await new Promise((r) => window.setTimeout(r, 100));
         } catch {
           steps = steps.map((s, idx) =>
             idx === i ? { ...s, status: 'failed' } : s,
@@ -493,7 +499,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       pendingAwaitRef.current = null;
       if (awaiting) {
         const readdressed =
-          /\b(elevyn|eleven|evelyn|elevan|elevin|elevon|elevation)\b/i.test(cleaned);
+          /\b(elevyn|eleven|evelyn|elevan|elevin|elevon|elevation|a ?11|a11|11)\b/i.test(
+            cleaned,
+          );
         const cancel = /^(never ?mind|cancel|forget it|nothing|stop|scratch that)\b/i.test(
           cleaned,
         );
@@ -881,7 +889,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         clearWakeCommit();
         wakeCommitRef.current = window.setTimeout(
           () => commitWake(remainder),
-          isFinal ? 280 : stableEnough ? 700 : 1100,
+          isFinal ? 140 : stableEnough ? 380 : 650,
         );
         return;
       }
@@ -890,7 +898,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       clearWakeCommit();
       wakeCommitRef.current = window.setTimeout(
         () => commitWake(),
-        isFinal ? 180 : 650,
+        isFinal ? 100 : 380,
       );
     },
     [
@@ -960,7 +968,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           if (isEchoOfReply(ready, lastSpokenRef.current)) return;
           void processUtterance(ready);
         }
-      }, isFinal ? 900 : 1300);
+      }, isFinal ? 450 : 700);
     },
     [armCommandTimeout, clearCommandDebounce, processUtterance, speak],
   );
@@ -996,15 +1004,17 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         },
         onError: (err) => {
           if (err === 'not-allowed') {
-            setError('Microphone permission is required for “Hey Elevyn”.');
-            setArmed(false);
-          } else {
-            // Network / service blips — retry wake shortly.
-            clearRestartTimer();
-            restartTimerRef.current = window.setTimeout(() => {
-              if (phaseRef.current === 'wake') startWakeListeningRef.current();
-            }, 400);
+            // Common right after Microsoft OAuth redirect — no user gesture yet.
+            // Never disarm; show a tap prompt so wake comes back.
+            setMicNeedsGesture(true);
+            setError('Tap the mic to resume listening.');
+            return;
           }
+          // Network / service blips — retry wake shortly.
+          clearRestartTimer();
+          restartTimerRef.current = window.setTimeout(() => {
+            if (phaseRef.current === 'wake') startWakeListeningRef.current();
+          }, 400);
         },
       },
       'wake',
@@ -1038,8 +1048,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         },
         onError: (err) => {
           if (err === 'not-allowed') {
-            setError('Microphone permission is required for “Hey Elevyn”.');
-            setArmed(false);
+            setMicNeedsGesture(true);
+            setError('Tap the mic to resume listening.');
             return;
           }
           clearRestartTimer();
@@ -1189,6 +1199,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const toggleArmed = useCallback(() => {
     // iPad: unlock TTS inside the tap so later async replies can speak.
     ttsRef.current.unlock();
+    setMicNeedsGesture(false);
+    setError(null);
     setArmed((prev) => {
       const next = !prev;
       if (!next) {
@@ -1204,10 +1216,18 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       } else {
         // Start inside the click gesture so Chrome grants the mic.
         window.setTimeout(() => startWakeListeningRef.current(), 0);
+        if (pendingMsConnectedRef.current) {
+          pendingMsConnectedRef.current = false;
+          window.setTimeout(() => {
+            speak('Outlook is connected. How can I help?', () => {
+              resumeConversationRef.current();
+            });
+          }, 200);
+        }
       }
       return next;
     });
-  }, [clearCommandTimeout, clearWakeCommit]);
+  }, [clearCommandTimeout, clearWakeCommit, speak]);
 
   const startListening = useCallback(() => {
     if (!recognitionRef.current.supported) {
@@ -1222,8 +1242,18 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     // iPad / iOS: Audio.play after /api/interpret needs a prior gesture unlock.
     ttsRef.current.unlock();
     ttsRef.current.stop();
+    setMicNeedsGesture(false);
+    setError(null);
+    if (pendingMsConnectedRef.current) {
+      pendingMsConnectedRef.current = false;
+      enterCommandMode();
+      speak('Outlook is connected. How can I help?', () => {
+        resumeConversationRef.current();
+      });
+      return;
+    }
     enterCommandMode();
-  }, [brainOnline, enterCommandMode]);
+  }, [brainOnline, enterCommandMode, speak]);
 
   const toggleListening = useCallback(() => {
     if (state === 'listening' || phaseRef.current === 'command') {
@@ -1232,6 +1262,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     }
     startListening();
   }, [startListening, state, stopListening]);
+
+  /** Call after Microsoft OAuth returns (?ms=connected). */
+  const noteMicrosoftConnected = useCallback(() => {
+    pendingMsConnectedRef.current = true;
+    setMicNeedsGesture(true);
+    setArmed(true);
+    setError('Outlook connected — tap the mic to resume.');
+  }, []);
 
   // Spoken announcement Elevyn initiates itself (timer warning, time up),
   // then quietly returns to listening. Never interrupts an active exchange.
@@ -1283,10 +1321,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     memoryEpoch,
     voiceLevel,
     hearAvailable,
+    micNeedsGesture,
     isAppleTouch: ttsRef.current.isAppleTouch,
     speechSupported: recognitionRef.current.supported,
     unlockAudio: () => ttsRef.current.unlock(),
     hearReply,
+    noteMicrosoftConnected,
     startListening,
     stopListening,
     toggleListening,

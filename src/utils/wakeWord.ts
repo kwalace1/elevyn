@@ -21,7 +21,7 @@ const FILLER_WORDS = new Set([
   'please',
 ]);
 const EXACT_NAME =
-  /^(?:elevyn|eleven|elevan|elevin|elevon|elevation|evelyn|ellen|elevynn|elevenn|elevene|elevens|elevum|eleva|elven|leven|11)$/i;
+  /^(?:elevyn|eleven|elevan|elevin|elevon|elevation|evelyn|ellen|elevynn|elevenn|elevene|elevens|elevum|eleva|elven|leven|11|a11|el11|l11)$/i;
 
 /** Canonical forms for edit-distance checks (avoid short/ambiguous targets). */
 const FUZZY_TARGETS = [
@@ -64,7 +64,8 @@ function levenshtein(a: string, b: string): number {
 export function isElevynNameToken(token: string): boolean {
   const w = token.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (!w) return false;
-  if (w === '11') return true;
+  // STT often hears Elevyn as "11", "A11", "a 11", etc.
+  if (/^(?:a?11|el11|l11|11)$/.test(w)) return true;
   if (EXACT_NAME.test(w)) return true;
   if (w.length < 5 || w.length > 11) return false;
   // Must look like Elevyn / Eleven family — not arbitrary English.

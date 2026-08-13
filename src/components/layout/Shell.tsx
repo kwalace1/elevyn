@@ -60,6 +60,16 @@ export function Shell() {
     return () => window.clearInterval(id);
   }, [refreshMicrosoft, elevyn.brainOnline, elevyn.memoryEpoch]);
 
+  // After Microsoft OAuth the page fully reloads — mic stays blocked until a tap.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('ms') !== 'connected') return;
+    elevyn.noteMicrosoftConnected();
+    void refreshMicrosoft();
+    window.history.replaceState({}, '', window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Always boot into ambient presence — never leave users on the systems dashboard.
   useEffect(() => {
     if (surface.view === 'dashboard') surface.enterFocus();
@@ -234,17 +244,19 @@ export function Shell() {
                 disabled={elevyn.state === 'thinking' || elevyn.state === 'speaking'}
               />
               <p className="shell__hint">
-                {elevyn.speechSupported
-                  ? elevyn.isAppleTouch
-                    ? elevyn.hearAvailable || elevyn.response
-                      ? 'If it’s silent, tap Hear reply — check the side mute switch too'
+                {elevyn.micNeedsGesture
+                  ? 'Outlook connected — tap the mic once to resume wake word'
+                  : elevyn.speechSupported
+                    ? elevyn.isAppleTouch
+                      ? elevyn.hearAvailable || elevyn.response
+                        ? 'If it’s silent, tap Hear reply — check the side mute switch too'
+                        : elevyn.armed
+                          ? 'Say “Hey Elevyn” or tap the mic'
+                          : 'Tap mic to talk · enable wake if you want hands-free'
                       : elevyn.armed
-                        ? 'Say “Hey Elevyn” or tap the mic'
-                        : 'Tap mic to talk · enable wake if you want hands-free'
-                    : elevyn.armed
-                      ? 'Say “Hey Elevyn” or just “Elevyn…”'
-                      : 'Wake word paused · click mic or press Space'
-                  : 'Use Chrome for voice · brain still accepts text API'}
+                        ? 'Say “Hey Elevyn”, “Eleven”, or “11”…'
+                        : 'Wake word paused · click mic or press Space'
+                    : 'Use Chrome for voice · brain still accepts text API'}
               </p>
               <div className="shell__core-telemetry" aria-hidden>
                 <span>
@@ -315,6 +327,8 @@ export function Shell() {
               elevyn.hearAvailable || (elevyn.isAppleTouch && Boolean(elevyn.response))
             }
             onHearReply={elevyn.hearReply}
+            micNeedsGesture={elevyn.micNeedsGesture}
+            onResumeMic={elevyn.toggleListening}
             onExit={() => {
               surface.enterFocus();
               elevyn.stopListening();

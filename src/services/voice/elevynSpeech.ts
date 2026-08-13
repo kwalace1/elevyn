@@ -362,7 +362,7 @@ export class ElevynSpeech implements TextToSpeechService {
     try {
       return await attempt();
     } catch {
-      await new Promise((r) => window.setTimeout(r, 160));
+      await new Promise((r) => window.setTimeout(r, 80));
       return attempt();
     }
   }

@@ -15,14 +15,14 @@ import type { AIProvider } from './provider.js';
 const OPENROUTER_BASE =
   process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
 
-/** Fast free default — good for short spoken replies. */
+/** Fast free default — prefer low-latency small models for spoken replies. */
 const DEFAULT_MODEL =
-  process.env.OPENROUTER_MODEL ?? 'google/gemma-4-26b-a4b-it:free';
+  process.env.OPENROUTER_MODEL ?? 'nvidia/nemotron-nano-9b-v2:free';
 
 const FALLBACK_MODELS = [
+  'google/gemma-4-26b-a4b-it:free',
   'openai/gpt-oss-20b:free',
   'inclusionai/ling-3.0-flash:free',
-  'nvidia/nemotron-nano-9b-v2:free',
   'openrouter/free',
 ];
 
@@ -71,7 +71,7 @@ export class OpenRouterProvider implements AIProvider {
               content: m.content,
             })),
           }),
-          signal: AbortSignal.timeout(25_000),
+          signal: AbortSignal.timeout(18_000),
         });
 
         if (!res.ok) {

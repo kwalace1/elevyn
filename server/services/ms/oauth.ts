@@ -332,7 +332,9 @@ export async function completeLogin(req: Request, res: Response): Promise<void> 
         : 'connected (no refresh)';
     }
     saveSession(req, res, tokens);
-    res.redirect('/');
+    // Flag the SPA so it can re-arm the mic after the OAuth full-page reload
+    // (browsers block SpeechRecognition until a fresh user gesture).
+    res.redirect('/?ms=connected');
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Sign-in failed';
     res.status(502).send(`Microsoft sign-in failed: ${message}`);

@@ -28,7 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch {
     // Local hot reloads and Vercel cold starts can briefly drop the first
     // connection. Retry once instead of telling Kevin the brain is unreachable.
-    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
     res = await fetchOnce();
   }
 

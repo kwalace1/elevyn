@@ -159,7 +159,7 @@ export class ElevynBrain {
         temperature: 0.2,
         // Enough headroom that a JSON chat reply is never cut mid-string —
         // truncated JSON used to leak raw {"type":"chat"... to the user.
-        maxTokens: 320,
+        maxTokens: 200,
       });
 
     try {

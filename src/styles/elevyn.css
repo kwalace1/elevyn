@@ -794,6 +794,12 @@ button {
   margin-top: 14px;
 }
 
+.focus__resume {
+  margin-top: 14px;
+  border-color: color-mix(in srgb, #f0c674 50%, transparent);
+  background: color-mix(in srgb, #f0c674 16%, transparent);
+}
+
 .focus__panels {
   margin-top: auto;
   padding-top: 32px;
