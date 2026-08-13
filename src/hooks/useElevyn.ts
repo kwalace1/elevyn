@@ -299,9 +299,21 @@ export function useElevyn(hooks: ElevynHooks = {}) {
             const panelContext = getContextRef.current?.();
             const sessionBlock = sessionRef.current.toContextBlock();
             const durableBlock = durableRef.current.toContextBlock();
+            const panels = getPanelsRef.current?.() ?? [];
+            const openTaskItems = (
+              panels.find((p) => p.kind === 'task')?.items ?? []
+            ).filter((it) => !it.done);
+            const openTasksBlock =
+              openTaskItems.length > 0
+                ? `=== OPEN TASKS ===\n${openTaskItems
+                    .slice(0, 8)
+                    .map((it) => `- ${it.text}`)
+                    .join('\n')}`
+                : undefined;
             const contextParts = [
               durableBlock,
               sessionBlock,
+              openTasksBlock,
               panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
             ].filter(Boolean);
             const context = contextParts.length
@@ -442,9 +454,21 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const panelContext = getContextRef.current?.();
         const sessionBlock = sessionRef.current.toContextBlock();
         const durableBlock = durableRef.current.toContextBlock();
+        const panels = getPanelsRef.current?.() ?? [];
+        const openTaskItems = (
+          panels.find((p) => p.kind === 'task')?.items ?? []
+        ).filter((it) => !it.done);
+        const openTasksBlock =
+          openTaskItems.length > 0
+            ? `=== OPEN TASKS ===\n${openTaskItems
+                .slice(0, 8)
+                .map((it) => `- ${it.text}`)
+                .join('\n')}`
+            : undefined;
         const contextParts = [
           durableBlock,
           sessionBlock,
+          openTasksBlock,
           panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
         ].filter(Boolean);
         const context = contextParts.length

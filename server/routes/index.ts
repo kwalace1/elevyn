@@ -23,6 +23,12 @@ import {
   utteranceNeedsMsToken,
 } from '../services/ms/actions.js';
 import {
+  buildWorkDayBrief,
+  parseAgendaFromContext,
+  parseOpenTasksFromContext,
+  wantsWorkDayBrief,
+} from '../services/ms/workBrief.js';
+import {
   formatAgendaWhen,
   parseSpokenAgenda,
 } from '../../src/utils/agendaParse.js';
@@ -30,6 +36,7 @@ import {
 function wantsMicrosoftContext(utterance: string): boolean {
   const lower = utterance.toLowerCase();
   return (
+    wantsWorkDayBrief(utterance) ||
     /\b(catch me up|brief me|where were we|status (update|report)|recap)\b/i.test(
       lower,
     ) ||
@@ -136,6 +143,7 @@ export function createAiRouter(
 
     const needsMs =
       wantsMicrosoftContext(utterance) ||
+      wantsWorkDayBrief(utterance) ||
       wantsCalendarBrief(utterance) ||
       /\b(check|any|read)\b.+\b(mail|email|inbox|outlook)\b/i.test(lower) ||
       /\b(teams|chat)\b/i.test(lower) ||
@@ -143,6 +151,66 @@ export function createAiRouter(
       Boolean(parseSpokenAgenda(utterance));
 
     const msBundle = needsMs ? await getValidAccessToken(req, res) : null;
+
+    // Work / morning brief — deterministic spoken summary + Day board on glass.
+    if (wantsWorkDayBrief(utterance)) {
+      if (
+        !msBundle &&
+        isMicrosoftConfigured() &&
+        /\b(mail|outlook|teams|microsoft|inbox)\b/i.test(lower)
+      ) {
+        res.json({
+          intent: {
+            type: 'chat',
+            reply:
+              'Microsoft 365 is not connected yet. Say “connect Microsoft” and I will open sign-in.',
+            args: { openUrl: '/api/mslogin' },
+          },
+          execution: null,
+        });
+        return;
+      }
+
+      try {
+        const openTasks = parseOpenTasksFromContext(context);
+        const agendaFallback = parseAgendaFromContext(context);
+        const [calendar, mail, chats] = msBundle
+          ? await Promise.all([
+              fetchGraphCalendar(msBundle.accessToken).catch(() => []),
+              fetchRecentMail(msBundle.accessToken, 5).catch(() => []),
+              fetchRecentTeamsChats(msBundle.accessToken, 5).catch(() => []),
+            ])
+          : [[], [], []];
+
+        const { spoken, board } = buildWorkDayBrief({
+          calendar,
+          mail,
+          chats,
+          openTasks,
+          agendaFallback,
+        });
+
+        res.json({
+          intent: {
+            type: 'surface',
+            surface: { op: 'createNote', title: 'Day board', text: board },
+            reply: spoken,
+          },
+          execution: null,
+        });
+        return;
+      } catch {
+        res.json({
+          intent: {
+            type: 'chat',
+            reply:
+              "I couldn't assemble your day brief just now. Want to try again in a moment?",
+          },
+          execution: null,
+        });
+        return;
+      }
+    }
 
     // Live Outlook calendar — never let the model invent fake calendar tools.
     if (msBundle && wantsCalendarBrief(utterance)) {

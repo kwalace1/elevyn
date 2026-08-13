@@ -242,7 +242,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Chain requests with "and then", or say "wrap up the meeting and draft a follow-up", or "plan my afternoon". Say "catch me up" anytime.',
+          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Say “catch me up” or “morning brief” for the day board. Chain requests with "and then", or say "wrap up the meeting and draft a follow-up", or "plan my afternoon".',
       };
     }
 
@@ -515,8 +515,12 @@ export class ElevynBrain {
     }
 
     // Catch-me-up from session + durable memory + agenda + on-screen context.
+    // Work / morning briefs ("catch me up for the day") are handled in the route.
     if (
       /\b(where were we|catch me up|brief me|status (update|report)|what (have|did) we (been )?(doing|discussing|talking about)|what'?s (going )?on( with (this|the) session)?|recap (the )?session)\b/i.test(
+        lower,
+      ) &&
+      !/\b(for (the )?day|for work|morning brief|daily brief|day board|start of (the )?day)\b/i.test(
         lower,
       )
     ) {
