@@ -29,6 +29,14 @@ import {
   wantsWorkDayBrief,
 } from '../services/ms/workBrief.js';
 import {
+  buildMeetingPrep,
+  parsePrepTarget,
+  pickMeetingForPrep,
+  prepFromContext,
+  relatedMailForMeeting,
+  wantsMeetingPrep,
+} from '../services/ms/meetingPrep.js';
+import {
   formatAgendaWhen,
   parseSpokenAgenda,
 } from '../../src/utils/agendaParse.js';
@@ -37,6 +45,7 @@ function wantsMicrosoftContext(utterance: string): boolean {
   const lower = utterance.toLowerCase();
   return (
     wantsWorkDayBrief(utterance) ||
+    wantsMeetingPrep(utterance) ||
     /\b(catch me up|brief me|where were we|status (update|report)|recap)\b/i.test(
       lower,
     ) ||
@@ -144,6 +153,7 @@ export function createAiRouter(
     const needsMs =
       wantsMicrosoftContext(utterance) ||
       wantsWorkDayBrief(utterance) ||
+      wantsMeetingPrep(utterance) ||
       wantsCalendarBrief(utterance) ||
       /\b(check|any|read)\b.+\b(mail|email|inbox|outlook)\b/i.test(lower) ||
       /\b(teams|chat)\b/i.test(lower) ||
@@ -151,6 +161,76 @@ export function createAiRouter(
       Boolean(parseSpokenAgenda(utterance));
 
     const msBundle = needsMs ? await getValidAccessToken(req, res) : null;
+
+    // Meeting prep — next / timed / named meeting pack on glass.
+    if (wantsMeetingPrep(utterance)) {
+      if (!msBundle && isMicrosoftConfigured()) {
+        res.json({
+          intent: {
+            type: 'chat',
+            reply:
+              'Microsoft 365 is not connected yet. Say “connect Microsoft” so I can prep from your Outlook calendar.',
+            args: { openUrl: '/api/mslogin' },
+          },
+          execution: null,
+        });
+        return;
+      }
+
+      try {
+        const { openTasks, agendaFallback } = prepFromContext(context);
+        const target = parsePrepTarget(utterance);
+        const [calendar, mail] = msBundle
+          ? await Promise.all([
+              fetchGraphCalendar(msBundle.accessToken).catch(() => []),
+              fetchRecentMail(msBundle.accessToken, 8).catch(() => []),
+            ])
+          : [[], []];
+
+        const event = pickMeetingForPrep(calendar, target);
+        const related = event ? relatedMailForMeeting(event, mail) : [];
+        const { spoken, board, title } = buildMeetingPrep({
+          event,
+          relatedMail: related,
+          openTasks,
+          agendaFallback,
+        });
+
+        // Named plan on glass: work canvas → prep note (≤2 steps).
+        res.json({
+          intent: {
+            type: 'agent',
+            reply: spoken,
+            plan: {
+              title: 'Meeting prep',
+              steps: [
+                { label: 'Work mode', surface: { op: 'work' as const } },
+                {
+                  label: title.slice(0, 42),
+                  surface: {
+                    op: 'createNote' as const,
+                    title,
+                    text: board,
+                  },
+                },
+              ],
+            },
+          },
+          execution: null,
+        });
+        return;
+      } catch {
+        res.json({
+          intent: {
+            type: 'chat',
+            reply:
+              "I couldn't assemble that meeting prep just now. Want to try again?",
+          },
+          execution: null,
+        });
+        return;
+      }
+    }
 
     // Work / morning brief — deterministic spoken summary + Day board on glass.
     if (wantsWorkDayBrief(utterance)) {

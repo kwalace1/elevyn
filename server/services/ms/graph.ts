@@ -150,9 +150,16 @@ function graphDate(dt?: { dateTime?: string; timeZone?: string }): string | null
   );
 }
 
+export type GraphCalendarEvent = CalendarEventPayload & {
+  location?: string;
+  preview?: string;
+  attendees?: string[];
+  isTeams?: boolean;
+};
+
 export async function fetchGraphCalendar(
   accessToken: string,
-): Promise<CalendarEventPayload[]> {
+): Promise<GraphCalendarEvent[]> {
   const now = new Date();
   const end = new Date(now.getTime() + 48 * 3600_000);
   const startIso = now.toISOString();
@@ -160,7 +167,7 @@ export async function fetchGraphCalendar(
   const query =
     `/me/calendarView?startDateTime=${encodeURIComponent(startIso)}` +
     `&endDateTime=${encodeURIComponent(endIso)}` +
-    `&$select=subject,start,end,location,onlineMeeting,isOnlineMeeting,bodyPreview` +
+    `&$select=subject,start,end,location,onlineMeeting,isOnlineMeeting,bodyPreview,attendees` +
     `&$orderby=start/dateTime` +
     `&$top=25`;
 
@@ -170,25 +177,51 @@ export async function fetchGraphCalendar(
       start?: { dateTime?: string; timeZone?: string };
       end?: { dateTime?: string; timeZone?: string };
       location?: { displayName?: string };
+      bodyPreview?: string;
       isOnlineMeeting?: boolean;
       onlineMeeting?: { joinUrl?: string };
+      attendees?: Array<{
+        emailAddress?: { name?: string; address?: string };
+      }>;
     }>;
   }>(accessToken, query);
 
-  const events: CalendarEventPayload[] = [];
+  const events: GraphCalendarEvent[] = [];
   for (const item of data.value ?? []) {
     const start = graphDate(item.start);
     if (!start || !item.subject) continue;
     const endAt = graphDate(item.end) ?? undefined;
     const joinUrl = item.onlineMeeting?.joinUrl;
     const location = item.location?.displayName?.trim();
-    let title = item.subject.trim();
-    if (joinUrl && !/teams/i.test(title)) {
+    const subject = item.subject.trim();
+    let title = subject;
+    const isTeams = Boolean(joinUrl || item.isOnlineMeeting);
+    if (isTeams && !/teams/i.test(title)) {
       title = `${title} (Teams)`;
     } else if (location && location.toLowerCase() !== 'microsoft teams meeting') {
       title = `${title} · ${location}`;
     }
-    events.push({ title, start, end: endAt });
+    const attendees = (item.attendees ?? [])
+      .map(
+        (a) =>
+          a.emailAddress?.name?.trim() ||
+          a.emailAddress?.address?.trim() ||
+          '',
+      )
+      .filter(Boolean)
+      .slice(0, 8);
+    events.push({
+      title,
+      start,
+      end: endAt,
+      location: location || undefined,
+      preview: (item.bodyPreview ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220),
+      attendees,
+      isTeams,
+    });
   }
   return events;
 }

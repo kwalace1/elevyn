@@ -22,25 +22,32 @@ export function matchAgentPlan(utterance: string): {
   const text = utterance.replace(/\s+/g, ' ').trim();
   const lower = text.toLowerCase();
 
-  // Wrap meeting + draft follow-up.
+  // Full meeting cycle: wrap → tasks → draft follow-up → ready-to-send cue.
   if (
-    /\b(wrap up|end|finish|summarize|summarise)\b.+\bmeeting\b/i.test(lower) &&
-    /\b(draft|follow[- ]?up|email|reply)\b/i.test(lower)
+    (/\b(wrap up|end|finish|close out|summarize|summarise)\b.+\bmeeting\b/i.test(
+      lower,
+    ) ||
+      /\bmeeting\b.+\b(wrap|close|follow[- ]?up)\b/i.test(lower)) &&
+    /\b(draft|follow[- ]?up|email|reply|recap)\b/i.test(lower)
   ) {
     return {
-      reply: 'Right away. I will wrap the meeting, then draft a follow-up.',
+      reply:
+        'Right away. I will wrap the meeting, pull actions, and draft a follow-up.',
       plan: {
         title: 'Meeting wrap',
         steps: [
           step('Stop capture', {
             surface: { op: 'stopCapture' },
           }),
-          step('Summarize and pull tasks', {
+          step('Summarize and tasks', {
             utterance: 'wrap up the meeting',
           }),
-          step('Draft follow-up note', {
+          step('Draft follow-up', {
             utterance:
               'draft a short follow-up email based on the meeting summary and pin it on screen',
+          }),
+          step('Ready to send', {
+            utterance: 'follow-up is ready to send',
           }),
         ],
       },
@@ -103,7 +110,7 @@ export function matchAgentPlan(utterance: string): {
   if (thenSplit.length >= 2 && thenSplit.length <= 4) {
     const parts = thenSplit.map((p) => p.trim()).filter(Boolean);
     const actionable = parts.every((p) =>
-      /\b(make|add|create|set|start|stop|clear|copy|summar|wrap|draft|pin|remember|schedule|open|timer|note|task|list|capture|work mode|go home)\b/i.test(
+      /\b(make|add|create|set|start|stop|clear|copy|summar|wrap|draft|pin|remember|schedule|open|timer|note|task|list|capture|work mode|go home|prep)\b/i.test(
         p,
       ),
     );
@@ -124,7 +131,7 @@ export function matchAgentPlan(utterance: string): {
 
   // Wrap + copy.
   if (
-    /\b(wrap up|end|finish)\b.+\bmeeting\b/i.test(lower) &&
+    /\b(wrap up|end|finish|close out)\b.+\bmeeting\b/i.test(lower) &&
     /\bcopy\b/i.test(lower)
   ) {
     return {

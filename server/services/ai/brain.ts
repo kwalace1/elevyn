@@ -242,7 +242,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Say “catch me up” or “morning brief” for the day board. Chain requests with "and then", or say "wrap up the meeting and draft a follow-up", or "plan my afternoon".',
+          'I am your sidekick. Ask me anything, remember facts across days, take notes and tasks, run timers, and capture meetings. Say “catch me up” for the day board, “prep me for the next meeting”, or “wrap up the meeting and draft a follow-up”. Chain requests with "and then", or say "plan my afternoon".',
       };
     }
 
@@ -511,6 +511,18 @@ export class ElevynBrain {
         type: 'chat',
         reply: 'Session cleared. Fresh slate.',
         args: { clearSession: true },
+      };
+    }
+
+    // Follow-up draft is on the board — cue to confirm send (used by wrap plan).
+    if (
+      /\bfollow[- ]?up is ready( to send)?\b/i.test(lower) ||
+      /\bready to send (the )?follow[- ]?up\b/i.test(lower)
+    ) {
+      return {
+        type: 'chat',
+        reply:
+          'Follow-up is on the board. Say “email that to …” when you want it sent, then “send it” to confirm.',
       };
     }
 
