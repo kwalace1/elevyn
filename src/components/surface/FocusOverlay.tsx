@@ -27,7 +27,7 @@ const STATE_HINT: Record<ElevynState, string> = {
   idle: 'Say “Hey Elevyn”',
   listening: 'Listening…',
   thinking: 'Working on it…',
-  speaking: 'Speaking…',
+  speaking: 'Talk over me anytime',
   offline: 'Offline',
 };
 
@@ -35,7 +35,7 @@ const WORK_HINT: Record<ElevynState, string> = {
   idle: 'Say “Elevyn” anytime',
   listening: 'Listening…',
   thinking: 'Working on it…',
-  speaking: 'Speaking…',
+  speaking: 'Talk over me anytime',
   offline: 'Offline',
 };
 
