@@ -121,6 +121,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   /** Mic is open under TTS waiting for Kevin to cut in. */
   const bargeArmedRef = useRef(false);
   const bargeCommitRef = useRef<number | null>(null);
+  /** True while Elevyn asked a question and MUST hear the next utterance. */
+  const mustCaptureAnswerRef = useRef(false);
   const handleBargeResultRef = useRef<(text: string, isFinal: boolean) => void>(
     () => {},
   );
@@ -210,18 +212,40 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       window.setTimeout(() => {
         if (!armedRef.current || !brainOnlineRef.current) return;
         if (processingRef.current) {
-          if (n < 6) attempt(n + 1);
+          if (n < 8) attempt(n + 1);
+          return;
+        }
+        // Waiting on an answer: cut TTS if needed and open the mic — never give up.
+        if (mustCaptureAnswerRef.current || pendingAwaitRef.current) {
+          if (stateRef.current === 'speaking') {
+            bargeArmedRef.current = false;
+            ttsRef.current.stop();
+            speakSessionRef.current += 1;
+            speakingReplyRef.current = '';
+            setState('idle');
+            stateRef.current = 'idle';
+          }
+          phaseRef.current = 'command';
+          startCommandListeningRef.current();
+          armCommandTimeoutRef.current();
+          window.setTimeout(() => {
+            if (!armedRef.current || !brainOnlineRef.current) return;
+            if (processingRef.current) return;
+            if (!pendingAwaitRef.current && !mustCaptureAnswerRef.current) return;
+            if (!recognitionRef.current.active || stateRef.current !== 'listening') {
+              startCommandListeningRef.current();
+              armCommandTimeoutRef.current();
+            }
+          }, 280);
           return;
         }
         if (stateRef.current === 'speaking' || stateRef.current === 'thinking') {
-          // Still winding down TTS — try again shortly instead of giving up.
-          if (n < 8) attempt(n + 1);
+          if (n < 10) attempt(n + 1);
           return;
         }
         phaseRef.current = 'command';
         startCommandListeningRef.current();
         armCommandTimeoutRef.current();
-        // Verify the mic actually stuck the landing.
         window.setTimeout(() => {
           if (!armedRef.current || !brainOnlineRef.current) return;
           if (processingRef.current) return;
@@ -235,7 +259,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
             startWakeListeningRef.current();
           }
         }, 320);
-      }, n === 0 ? 80 : 200);
+      }, n === 0 ? 60 : 180);
     };
     attempt(0);
   }, []);
@@ -322,9 +346,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       });
 
       // Open the mic under her voice so Kevin can cut in naturally.
+      // Skip barge when we must capture a slot answer — it races the resume mic.
       window.setTimeout(() => {
         if (speakSessionRef.current !== session) return;
         if (stateRef.current !== 'speaking') return;
+        if (mustCaptureAnswerRef.current || pendingAwaitRef.current) return;
         startBargeListeningRef.current();
       }, 220);
 
@@ -657,6 +683,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       const awaiting = pendingAwaitRef.current;
       pendingAwaitRef.current = null;
       if (awaiting) {
+        mustCaptureAnswerRef.current = false;
         const readdressed =
           /\b(elevyn|eleven|evelyn|elevan|elevin|elevon|elevation|a ?11|a11|11)\b/i.test(
             cleaned,
@@ -665,6 +692,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           cleaned,
         );
         if (cancel && !readdressed) {
+          mustCaptureAnswerRef.current = false;
           clearCommandTimeout();
           clearCommandDebounce();
           clearWakeCommit();
@@ -827,7 +855,10 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const nextAwait = intent.awaiting ?? null;
         pendingAwaitRef.current = nextAwait;
         holdConversationRef.current = true;
-        const resume = () => resumeConversationRef.current();
+        mustCaptureAnswerRef.current = Boolean(nextAwait);
+        const resume = () => {
+          resumeConversationRef.current();
+        };
 
         // Meeting capture lines stay silent — visual confirm only, stay listening.
         if (silent || !reply.trim()) {
@@ -837,14 +868,38 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           resume();
         } else {
           speak(reply, resume);
-          // Safety net: always re-open the mic after a reply, even if TTS onEnd
-          // or barge teardown races leave recognition dead.
+          // If she asked a question, force the mic open while/after she asks —
+          // don't wait on TTS onEnd (common failure that leaves the orb dead).
+          if (nextAwait) {
+            window.setTimeout(() => {
+              if (!armedRef.current || !brainOnlineRef.current) return;
+              if (processingRef.current) return;
+              if (pendingAwaitRef.current !== nextAwait) return;
+              resumeConversationRef.current();
+            }, 700);
+            window.setTimeout(() => {
+              if (!armedRef.current || !brainOnlineRef.current) return;
+              if (processingRef.current) return;
+              if (pendingAwaitRef.current !== nextAwait) return;
+              if (
+                stateRef.current === 'listening' &&
+                recognitionRef.current.active
+              ) {
+                return;
+              }
+              resumeConversationRef.current();
+            }, 1800);
+          }
+          // Safety net: always re-open the mic after a reply.
           window.setTimeout(() => {
             if (!armedRef.current || !brainOnlineRef.current) return;
             if (processingRef.current) return;
             if (stateRef.current === 'thinking') return;
+            if (pendingAwaitRef.current || mustCaptureAnswerRef.current) {
+              resumeConversationRef.current();
+              return;
+            }
             if (stateRef.current === 'speaking') {
-              // Still speaking somehow — force wind-down and listen.
               bargeArmedRef.current = false;
               ttsRef.current.stop();
               speakSessionRef.current += 1;
@@ -852,15 +907,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
               setState('idle');
               stateRef.current = 'idle';
             }
-            if (recognitionRef.current.active) {
-              if (
-                phaseRef.current === 'command' ||
-                phaseRef.current === 'wake'
-              ) {
-                return;
-              }
+            if (
+              recognitionRef.current.active &&
+              stateRef.current === 'listening' &&
+              phaseRef.current === 'command'
+            ) {
+              return;
             }
-            if (holdConversationRef.current || pendingAwaitRef.current) {
+            if (holdConversationRef.current) {
               resumeConversationRef.current();
             } else {
               resumeWakeSoon();
@@ -893,22 +947,33 @@ export function useElevyn(hooks: ElevynHooks = {}) {
 
   /** How long to keep accepting follow-ups without re-saying the name. */
   const CONVERSATION_HOLD_MS = 18_000;
+  /** Longer window when Elevyn asked a question and is waiting on an answer. */
+  const AWAITING_HOLD_MS = 60_000;
 
   const armCommandTimeout = useCallback(() => {
     clearCommandTimeout();
+    const holdMs = pendingAwaitRef.current || mustCaptureAnswerRef.current
+      ? AWAITING_HOLD_MS
+      : CONVERSATION_HOLD_MS;
     commandTimeoutRef.current = window.setTimeout(() => {
       if (phaseRef.current !== 'command' || processingRef.current) return;
+      // Still waiting on Teams/mail/note answer — keep listening, don't drop to wake.
+      if (pendingAwaitRef.current || mustCaptureAnswerRef.current) {
+        startCommandListeningRef.current();
+        armCommandTimeoutRef.current();
+        return;
+      }
       holdConversationRef.current = false;
       pendingAwaitRef.current = null;
+      mustCaptureAnswerRef.current = false;
       clearCommandDebounce();
       recognitionRef.current.abort();
       phaseRef.current = 'wake';
       setState('idle');
       stateRef.current = 'idle';
       setTranscript('');
-      // Always re-arm wake — Elevyn / 11 must work after the hold window.
       resumeWakeSoon();
-    }, CONVERSATION_HOLD_MS);
+    }, holdMs);
   }, [clearCommandDebounce, clearCommandTimeout, resumeWakeSoon]);
 
   processUtteranceRef.current = processUtterance;
@@ -1091,8 +1156,22 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const handleCommandResult = useCallback(
     (text: string, isFinal: boolean) => {
       if (phaseRef.current !== 'command') return;
-      if (stateRef.current === 'thinking' || stateRef.current === 'speaking') {
+      if (stateRef.current === 'thinking') return;
+      // Allow capture while winding down a question prompt.
+      if (
+        stateRef.current === 'speaking' &&
+        !mustCaptureAnswerRef.current &&
+        !pendingAwaitRef.current
+      ) {
         return;
+      }
+      if (stateRef.current === 'speaking') {
+        bargeArmedRef.current = false;
+        ttsRef.current.stop();
+        speakSessionRef.current += 1;
+        speakingReplyRef.current = '';
+        setState('listening');
+        stateRef.current = 'listening';
       }
       // Drop speaker bleed right after Elevyn finishes talking — but never
       // drop a bare wake address ("Eleven" / "hey Elevyn").
@@ -1254,15 +1333,32 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const startCommandListening = useCallback(() => {
     if (!recognitionRef.current.supported) return;
     if (processingRef.current) return;
-    if (stateRef.current === 'speaking' || stateRef.current === 'thinking') {
-      // Retry once speech/think clears — never silently drop the mic.
+    if (stateRef.current === 'thinking') {
       clearRestartTimer();
       restartTimerRef.current = window.setTimeout(() => {
-        if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return;
-        if (processingRef.current) return;
+        if (stateRef.current === 'thinking' || processingRef.current) return;
         startCommandListeningRef.current();
       }, 220);
       return;
+    }
+    // Waiting on an answer: stop TTS and open the mic even if still "speaking".
+    if (stateRef.current === 'speaking') {
+      if (mustCaptureAnswerRef.current || pendingAwaitRef.current) {
+        bargeArmedRef.current = false;
+        ttsRef.current.stop();
+        speakSessionRef.current += 1;
+        speakingReplyRef.current = '';
+        setState('idle');
+        stateRef.current = 'idle';
+      } else {
+        clearRestartTimer();
+        restartTimerRef.current = window.setTimeout(() => {
+          if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return;
+          if (processingRef.current) return;
+          startCommandListeningRef.current();
+        }, 220);
+        return;
+      }
     }
     clearRestartTimer();
     phaseRef.current = 'command';
@@ -1274,7 +1370,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         onResult: handleCommandResult,
         onEnd: () => {
           if (phaseRef.current !== 'command' || processingRef.current) return;
-          if (stateRef.current === 'thinking' || stateRef.current === 'speaking') {
+          if (stateRef.current === 'thinking') return;
+          if (stateRef.current === 'speaking' && !mustCaptureAnswerRef.current) {
             return;
           }
           clearRestartTimer();
@@ -1290,7 +1387,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           }
           clearRestartTimer();
           restartTimerRef.current = window.setTimeout(() => {
-            if (phaseRef.current === 'command') {
+            if (phaseRef.current === 'command' || pendingAwaitRef.current) {
               startCommandListeningRef.current();
             } else {
               startWakeListeningRef.current();
