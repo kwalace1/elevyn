@@ -20,6 +20,7 @@
     "src/types/**/*.ts",
     "src/utils/agendaParse.ts",
     "src/utils/spokenReply.ts",
-    "src/utils/peopleMemory.ts"
+    "src/utils/peopleMemory.ts",
+    "src/utils/thinkOnGlass.ts"
   ]
 }

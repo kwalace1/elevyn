@@ -22,6 +22,11 @@ import {
   UNSURE_REPLY,
 } from '../../../src/utils/spokenReply.js';
 import { parsePersonFact } from '../../../src/utils/peopleMemory.js';
+import {
+  defaultThinkSpoken,
+  sanitizeBoardText,
+  wantsThinkOnGlass,
+} from '../../../src/utils/thinkOnGlass.js';
 
 /** Kevin's timezone — Vercel functions run in UTC, so never trust server local time. */
 const TIME_ZONE = process.env.ELEVYN_TZ ?? 'America/New_York';
@@ -47,6 +52,12 @@ Answer "what's next" / "am I free" / calendar questions from the agenda or Micro
 When MICROSOFT 365 context is present, weave unread mail and Teams into catch-me-up briefly — do not invent messages.
 Kevin may ask you to email, Teams-message, or schedule on Outlook — the server handles those write actions; prefer confirming facts you know.
 
+THINK ON GLASS — critical:
+- For design, explanation, architecture, comparisons, walkthroughs, brainstorms, or multi-step reasoning: respond as a surface createNote.
+- Put the full useful answer in surface.text (plain text, short sections, no markdown fences). Optional short title.
+- Spoken reply must be ONE short sentence only (e.g. "I've put a short design on the board.") — never read the essay aloud.
+- Simple facts, yes/no, and confirmations stay as chat with 1-2 spoken sentences.
+
 CRITICAL — spoken replies must stay human:
 - Never invent tool calls, function calls, XML, APIs, command names, permission names, or endpoint paths.
 - Never mention commandId, Graph, OAuth, JSON, schemas, or internal systems.
@@ -65,7 +76,7 @@ Valid surface ops:
 - "work": minimal work canvas ("let's work", "work mode", "enter work mode")
 - "dashboard": systems / operator view ("show systems", "show dashboard")
 - "clear": remove panels ("clear the screen", "clean up")
-- "createNote": note in "text", optional "title". Use for pinning useful answers.
+- "createNote": note in "text", optional "title". Use for pinning useful answers and think-on-glass write-ups.
 - "createTask": task/reminder in "text"
 - "createList": list in "items", optional "title"
 - "addItem": add one entry to current list/tasks in "text"
@@ -73,14 +84,14 @@ Valid surface ops:
 - "startCapture" / "stopCapture" / "appendCapture": meeting capture
 - "timer" / "cancelTimer": countdown; "timer" needs "seconds"
 
-Just chatting or answering a question:
+Just chatting or answering a short question:
 {"type":"chat","reply":"<spoken answer>"}
 
 Multi-step plan when Kevin chains actions ("and then"), wraps a meeting and drafts a follow-up, or asks to plan his afternoon:
 {"type":"agent","reply":"<short spoken ack>","plan":{"title":"<name>","steps":[{"label":"<label>","utterance":"<optional>","surface":{"op":"<optional>"},"remember":"<optional>","copy":false}]}}
 Max 4 steps. Use utterance for wrap/summarize/draft/pin. Use surface for work/clear/timer/stopCapture.
 
-Prefer surface or agent actions when he clearly wants something done. Keep replies brief and useful.`
+Prefer surface or agent actions when he clearly wants something done. Keep spoken replies brief and useful.`
 
 export class ElevynBrain {
   constructor(
@@ -243,7 +254,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am your sidekick. Ask me anything, remember people and facts across days, take notes and tasks, run timers, and capture meetings. Say “catch me up” for the day board, “prep me for the next meeting”, or “wrap up the meeting and draft a follow-up”. Remember contacts with “remember Sarah’s email is …”.',
+          'I am your sidekick. Ask me anything, remember people and facts across days, take notes and tasks, run timers, and capture meetings. Say “catch me up” for the day board, “prep me for the next meeting”, or “explain …” to pin a write-up on the glass. Remember contacts with “remember Sarah’s email is …”.',
       };
     }
 
@@ -515,6 +526,11 @@ export class ElevynBrain {
       };
     }
 
+    // Think-on-glass — long reasoning on the wall, one spoken sentence.
+    if (wantsThinkOnGlass(original)) {
+      return this.thinkOnGlass(original, ctx || undefined);
+    }
+
     // Follow-up draft is on the board — cue to confirm send (used by wrap plan).
     if (
       /\bfollow[- ]?up is ready( to send)?\b/i.test(lower) ||
@@ -598,7 +614,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'createNote', title: 'Meeting summary', text: summary },
-        reply: `Meeting wrapped.${actionLine} ${summary}`.trim(),
+        reply: `Meeting wrapped.${actionLine} Summary is on the board.`.trim(),
         args: {
           stopCapture: true,
           actionItems: actions,
@@ -717,7 +733,7 @@ export class ElevynBrain {
       return {
         type: 'surface',
         surface: { op: 'createNote', title: 'Summary', text: summary },
-        reply: `Here is your summary. ${summary}`,
+        reply: "I've put a short summary on the board.",
       };
     }
 
@@ -753,6 +769,86 @@ export class ElevynBrain {
     }
 
     return null;
+  }
+
+  /** Long reasoning → createNote on glass; spoken ack stays one line. */
+  private async thinkOnGlass(
+    utterance: string,
+    context?: string,
+  ): Promise<InterpretedIntent> {
+    const provider = await this.ai.resolve();
+    if (!provider) {
+      return {
+        type: 'chat',
+        reply:
+          "I'd pin a write-up on the board, but I can't think clearly just yet. Give me a moment and try again.",
+      };
+    }
+
+    try {
+      const userContent = context?.trim()
+        ? `${context.trim()}\n\n=== REQUEST ===\n${utterance}`
+        : utterance;
+      const completion = await this.ai.complete({
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are Elevyn. Kevin wants deeper thinking on the glass, not a spoken essay. Reply with ONLY one JSON object:\n' +
+              '{"title":"<≤6 word board title>","board":"<plain text for the wall: short labeled sections or tight paragraphs, no markdown fences, no bullets with dashes if avoidable — use line breaks. Max ~1100 characters.>","spoken":"<ONE TTS sentence under 18 words, e.g. I\'ve put a short design on the board.>"}\n' +
+              'British English. Use PEOPLE / durable / on-screen context when present. Do not invent mail, calendar, or tool calls.',
+          },
+          { role: 'user', content: userContent },
+        ],
+        temperature: 0.35,
+        maxTokens: 700,
+      });
+
+      const match = completion.content.match(/\{[\s\S]*\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]) as {
+          title?: string;
+          board?: string;
+          spoken?: string;
+        };
+        const board = sanitizeBoardText(String(parsed.board ?? ''));
+        const title = String(parsed.title ?? 'Thinking')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 48);
+        if (board.length >= 40) {
+          const spoken =
+            sanitizeSpokenReply(parsed.spoken) ?? defaultThinkSpoken(title);
+          return {
+            type: 'surface',
+            surface: {
+              op: 'createNote',
+              title: title || 'Thinking',
+              text: board,
+            },
+            reply: spoken.slice(0, 160),
+          };
+        }
+      }
+    } catch {
+      // fall through to extractive / short chat
+    }
+
+    // Fallback: still pin something useful rather than lecture aloud.
+    const fallback = sanitizeBoardText(
+      [
+        utterance.replace(/\s+/g, ' ').trim(),
+        '',
+        context
+          ? 'Context on hand — open tasks, notes, and memory are available when you ask again with a sharper angle.'
+          : 'Say a bit more about constraints or the outcome you want, and I will pin a fuller write-up.',
+      ].join('\n'),
+    );
+    return {
+      type: 'surface',
+      surface: { op: 'createNote', title: 'Thinking', text: fallback },
+      reply: defaultThinkSpoken('a short note'),
+    };
   }
 
   private async briefSession(context: string): Promise<string> {
@@ -938,10 +1034,25 @@ export class ElevynBrain {
           parsed.surface?.op &&
           validSurfaceOps.has(parsed.surface.op)
         ) {
+          const surface = { ...parsed.surface };
+          if (surface.op === 'createNote' && surface.text) {
+            surface.text = sanitizeBoardText(String(surface.text));
+          }
+          // Think-on-glass: never speak a long essay even if the model stuffed it in reply.
+          let reply =
+            safeReply === UNSURE_REPLY ? 'Certainly.' : safeReply;
+          if (
+            surface.op === 'createNote' &&
+            surface.text &&
+            surface.text.length > 160 &&
+            reply.length > 140
+          ) {
+            reply = defaultThinkSpoken(surface.title);
+          }
           return {
             type: 'surface',
-            surface: parsed.surface,
-            reply: safeReply === UNSURE_REPLY ? 'Certainly.' : safeReply,
+            surface,
+            reply,
           };
         }
         if (parsed.type === 'agent' && parsed.plan?.steps?.length) {
@@ -955,9 +1066,28 @@ export class ElevynBrain {
           }
         }
         if (parsed.type === 'chat') {
+          const chatReply =
+            sanitizeSpokenReply(parsed.reply) ?? UNSURE_REPLY;
+          // Safety net: long chat essays become a glass note + short ack.
+          if (
+            chatReply !== UNSURE_REPLY &&
+            chatReply.length > 260 &&
+            (wantsThinkOnGlass(fallbackUtterance) ||
+              chatReply.split(/(?<=[.!?])\s+/).length >= 4)
+          ) {
+            return {
+              type: 'surface',
+              surface: {
+                op: 'createNote',
+                title: 'Note',
+                text: sanitizeBoardText(chatReply),
+              },
+              reply: defaultThinkSpoken(),
+            };
+          }
           return {
             type: 'chat',
-            reply: sanitizeSpokenReply(parsed.reply) ?? UNSURE_REPLY,
+            reply: chatReply,
           };
         }
       } catch {
