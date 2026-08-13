@@ -199,6 +199,31 @@ export function matchStopCommand(transcript: string): boolean {
 }
 
 /**
+ * True when mic input during TTS is the user cutting in — not speaker bleed.
+ * Used for natural barge-in while Elevyn is talking.
+ */
+export function looksLikeBargeIn(heard: string, reply: string): boolean {
+  const normalized = normalizeTranscript(heard);
+  if (!normalized) return false;
+  if (matchStopCommand(normalized)) return true;
+  if (isEchoOfReply(normalized, reply)) return false;
+
+  const addressed = matchAddress(normalized, { leadingOnly: true });
+  // Re-addressing mid-speech ("Elevyn…") — cut her off and listen.
+  if (addressed.heard) return true;
+
+  const content = normalizeTranscript(
+    addressed.heard ? addressed.remainder : normalized,
+  );
+  const words = content.split(' ').filter((w) => w.length > 1);
+  // Two+ real words that aren't the reply → Kevin is talking over her.
+  if (words.length >= 2) return true;
+  // One clear word (often "wait", "no", a name) that's not echo.
+  if (words.length === 1 && words[0].length >= 3) return true;
+  return false;
+}
+
+/**
  * Echo guard: Chrome's mic often hears Elevyn's own TTS.
  * Treat as echo when heard content is largely already in the reply.
  */

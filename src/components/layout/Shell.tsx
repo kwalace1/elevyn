@@ -131,11 +131,12 @@ export function Shell() {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
-      if (e.code === 'Space') {
-        e.preventDefault();
-        if (elevyn.state === 'thinking' || elevyn.state === 'speaking') return;
-        elevyn.toggleListening();
-      }
+        if (e.code === 'Space') {
+          e.preventDefault();
+          // Allow Space to barge in while speaking — human cut-off.
+          if (elevyn.state === 'thinking') return;
+          elevyn.toggleListening();
+        }
 
       if (e.code === 'Escape' && surface.view === 'work') {
         e.preventDefault();
@@ -241,7 +242,7 @@ export function Shell() {
                 onUnlockAudio={elevyn.unlockAudio}
                 onHearReply={elevyn.hearReply}
                 hearAvailable={elevyn.hearAvailable || (elevyn.isAppleTouch && Boolean(elevyn.response))}
-                disabled={elevyn.state === 'thinking' || elevyn.state === 'speaking'}
+                disabled={elevyn.state === 'thinking'}
               />
               <p className="shell__hint">
                 {elevyn.micNeedsGesture

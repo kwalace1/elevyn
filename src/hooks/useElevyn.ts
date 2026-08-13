@@ -24,8 +24,10 @@ import {
 import { formatAgendaWhen, parseSpokenAgenda } from '../utils/agendaParse';
 import {
   isEchoOfReply,
+  looksLikeBargeIn,
   matchAddress,
   matchCaptureShortcut,
+  matchStopCommand,
 } from '../utils/wakeWord';
 import { safeSpeakReply } from '../utils/spokenReply';
 import type { PersonRecord } from '../utils/peopleMemory';
@@ -104,9 +106,18 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const lastSpokenRef = useRef('');
   // Throttle situational wake briefs so Elevyn does not monologue every "Elevyn".
   const lastBriefAtRef = useRef(0);
+  /** Bumps on each speak/interrupt so stale onEnd can't resume the wrong turn. */
+  const speakSessionRef = useRef(0);
+  /** Mic is open under TTS waiting for Kevin to cut in. */
+  const bargeArmedRef = useRef(false);
+  const bargeCommitRef = useRef<number | null>(null);
+  const handleBargeResultRef = useRef<(text: string, isFinal: boolean) => void>(
+    () => {},
+  );
 
   const startWakeListeningRef = useRef<() => void>(() => {});
   const startCommandListeningRef = useRef<() => void>(() => {});
+  const startBargeListeningRef = useRef<() => void>(() => {});
 
   const onWakeRef = useRef<ElevynHooks['onWake']>(hooks.onWake);
   const onSurfaceRef = useRef<ElevynHooks['onSurface']>(hooks.onSurface);
@@ -172,6 +183,13 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     }
   }, []);
 
+  const clearBargeCommit = useCallback(() => {
+    if (bargeCommitRef.current !== null) {
+      window.clearTimeout(bargeCommitRef.current);
+      bargeCommitRef.current = null;
+    }
+  }, []);
+
   const speak = useCallback(
     (text: string, onDone?: () => void) => {
       const raw = text.trim();
@@ -184,9 +202,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       // Final choke point — never let tool/XML/JSON leakage hit the speakers.
       const trimmed = safeSpeakReply(raw);
 
-      // Mute the mic while Elevyn talks — open mics during TTS hear Sonia
-      // and treat the reply as a user utterance.
+      const session = ++speakSessionRef.current;
+      bargeArmedRef.current = false;
+      clearBargeCommit();
       clearRestartTimer();
+      // Close any prior mic session; barge listening re-opens under TTS.
       recognitionRef.current.abort();
 
       setResponse(trimmed);
@@ -202,8 +222,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       let finished = false;
       const finish = () => {
         if (finished) return;
+        // Interrupted — a newer speak/barge owns the turn.
+        if (speakSessionRef.current !== session) return;
         finished = true;
-        echoGuardUntilRef.current = Date.now() + 600;
+        bargeArmedRef.current = false;
+        clearBargeCommit();
+        echoGuardUntilRef.current = Date.now() + 400;
         if (speakingReplyRef.current === trimmed) {
           speakingReplyRef.current = '';
         }
@@ -216,19 +240,27 @@ export function useElevyn(hooks: ElevynHooks = {}) {
 
       ttsRef.current.speak(trimmed, {
         onEnd: () => {
-          // Brief settle so speaker bleed dies, then always resume listening.
-          window.setTimeout(finish, 350);
+          // Short settle so speaker bleed dies, then resume listening.
+          window.setTimeout(finish, 180);
         },
       });
 
+      // Open the mic under her voice so Kevin can cut in naturally.
+      window.setTimeout(() => {
+        if (speakSessionRef.current !== session) return;
+        if (stateRef.current !== 'speaking') return;
+        startBargeListeningRef.current();
+      }, 220);
+
       // Hard safety: if TTS onEnd is lost, never stay stuck "speaking" with a dead mic.
       window.setTimeout(() => {
+        if (speakSessionRef.current !== session) return;
         if (stateRef.current === 'speaking' && speakingReplyRef.current === trimmed) {
           finish();
         }
       }, Math.min(20_000, 2500 + trimmed.length * 80));
     },
-    [clearRestartTimer],
+    [clearBargeCommit, clearRestartTimer],
   );
 
   const speakAsync = useCallback(
@@ -238,6 +270,46 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       }),
     [speak],
   );
+
+  /**
+   * Cut Elevyn off mid-sentence and either listen or act on what Kevin said.
+   * This is the core of natural back-and-forth.
+   */
+  const interruptSpeech = useCallback(
+    (followUp?: string) => {
+      speakSessionRef.current += 1;
+      bargeArmedRef.current = false;
+      clearBargeCommit();
+      clearRestartTimer();
+      ttsRef.current.stop();
+      speakingReplyRef.current = '';
+      echoGuardUntilRef.current = Date.now() + 220;
+      holdConversationRef.current = true;
+      phaseRef.current = 'command';
+      onWakeRef.current?.();
+
+      const cmd = followUp?.trim() ?? '';
+      if (cmd && !matchStopCommand(cmd)) {
+        setTranscript(cmd);
+        setState('listening');
+        stateRef.current = 'listening';
+        void processUtteranceRef.current?.(cmd);
+        return;
+      }
+
+      setTranscript('');
+      setState('listening');
+      stateRef.current = 'listening';
+      startCommandListeningRef.current();
+      armCommandTimeoutRef.current?.();
+    },
+    [clearBargeCommit, clearRestartTimer],
+  );
+
+  const processUtteranceRef = useRef<(utterance: string) => void>(() => {});
+  const armCommandTimeoutRef = useRef<() => void>(() => {});
+  const interruptSpeechRef = useRef<(followUp?: string) => void>(() => {});
+  interruptSpeechRef.current = interruptSpeech;
 
   const effectHooks = useCallback(
     (): Parameters<typeof applyIntentEffects>[1] => ({
@@ -717,6 +789,9 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     }, CONVERSATION_HOLD_MS);
   }, [clearCommandDebounce, clearCommandTimeout, resumeWakeSoon]);
 
+  processUtteranceRef.current = processUtterance;
+  armCommandTimeoutRef.current = armCommandTimeout;
+
   // Keep the mic open (command phase) so Kevin can answer a follow-up
   // without re-saying "Elevyn" / "Eleven".
   const resumeConversation = useCallback(() => {
@@ -973,6 +1048,57 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     [armCommandTimeout, clearCommandDebounce, processUtterance, speak],
   );
 
+  const handleBargeResult = useCallback(
+    (text: string, isFinal: boolean) => {
+      if (stateRef.current !== 'speaking') return;
+      if (!bargeArmedRef.current) return;
+      if (processingRef.current) return;
+
+      const reply = speakingReplyRef.current || lastSpokenRef.current;
+      if (!looksLikeBargeIn(text, reply)) return;
+
+      const addressed = matchAddress(text, { leadingOnly: true });
+      let command = (addressed.heard ? addressed.remainder : text).trim();
+      if (matchStopCommand(text)) {
+        // Pure stop / "hold on" — cut audio and listen.
+        const stopOnly = matchStopCommand(command) || !command;
+        if (stopOnly) {
+          clearBargeCommit();
+          interruptSpeechRef.current();
+          return;
+        }
+      }
+
+      // Drop leading stop words if Kevin said "wait, what's on my calendar"
+      command = command
+        .replace(
+          /^(?:stop|wait|hold on|hang on|actually|no)\s*[,.]?\s+/i,
+          '',
+        )
+        .trim();
+
+      const commit = () => {
+        clearBargeCommit();
+        if (stateRef.current !== 'speaking') return;
+        setTranscript(command || text);
+        interruptSpeechRef.current(command || undefined);
+      };
+
+      // Early cut on strong finals or clear multi-word barge-ins.
+      if (isFinal || matchStopCommand(text)) {
+        commit();
+        return;
+      }
+      const words = (command || text).trim().split(/\s+/).filter(Boolean);
+      if (words.length >= 3 || addressed.heard) {
+        clearBargeCommit();
+        bargeCommitRef.current = window.setTimeout(commit, 280);
+      }
+    },
+    [clearBargeCommit],
+  );
+  handleBargeResultRef.current = handleBargeResult;
+
   const startWakeListening = useCallback(() => {
     if (!recognitionRef.current.supported) return;
     if (!armedRef.current || !brainOnlineRef.current) return;
@@ -1064,8 +1190,44 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     );
   }, [clearRestartTimer, handleCommandResult]);
 
+  const startBargeListening = useCallback(() => {
+    if (!recognitionRef.current.supported) return;
+    if (!armedRef.current || !brainOnlineRef.current) return;
+    if (stateRef.current !== 'speaking') return;
+    if (processingRef.current) return;
+
+    bargeArmedRef.current = true;
+    recognitionRef.current.start(
+      {
+        onResult: (text, isFinal) => handleBargeResultRef.current(text, isFinal),
+        onEnd: () => {
+          if (!bargeArmedRef.current) return;
+          if (stateRef.current !== 'speaking') return;
+          clearRestartTimer();
+          restartTimerRef.current = window.setTimeout(() => {
+            startBargeListeningRef.current();
+          }, 100);
+        },
+        onError: (err) => {
+          if (err === 'not-allowed') {
+            bargeArmedRef.current = false;
+            return;
+          }
+          if (!bargeArmedRef.current) return;
+          if (stateRef.current !== 'speaking') return;
+          clearRestartTimer();
+          restartTimerRef.current = window.setTimeout(() => {
+            startBargeListeningRef.current();
+          }, 280);
+        },
+      },
+      'command',
+    );
+  }, [clearRestartTimer]);
+
   startWakeListeningRef.current = startWakeListening;
   startCommandListeningRef.current = startCommandListening;
+  startBargeListeningRef.current = startBargeListening;
 
   // Mic watchdog — if Chrome drops recognition after a reply, reopen it.
   useEffect(() => {
@@ -1166,12 +1328,15 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     return () => {
       recognitionRef.current.abort();
       ttsRef.current.stop();
+      bargeArmedRef.current = false;
       clearCommandTimeout();
       clearRestartTimer();
       clearCommandDebounce();
       clearWakeCommit();
+      clearBargeCommit();
     };
   }, [
+    clearBargeCommit,
     clearCommandDebounce,
     clearCommandTimeout,
     clearRestartTimer,
@@ -1256,12 +1421,17 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   }, [brainOnline, enterCommandMode, speak]);
 
   const toggleListening = useCallback(() => {
+    // Tap while she's talking = cut her off and listen (human barge-in).
+    if (state === 'speaking' || stateRef.current === 'speaking') {
+      interruptSpeech();
+      return;
+    }
     if (state === 'listening' || phaseRef.current === 'command') {
       stopListening();
       return;
     }
     startListening();
-  }, [startListening, state, stopListening]);
+  }, [interruptSpeech, startListening, state, stopListening]);
 
   /** Call after Microsoft OAuth returns (?ms=connected). */
   const noteMicrosoftConnected = useCallback(() => {

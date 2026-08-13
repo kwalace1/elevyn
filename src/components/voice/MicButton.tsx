@@ -53,12 +53,14 @@ export function MicButton({
             />
           </svg>
         </span>
-        <span className="mic-button__text">
+                <span className="mic-button__text">
           {listening
             ? 'Listening…'
-            : armed
-              ? 'Say “Hey Elevyn”'
-              : 'Wake word off'}
+            : state === 'speaking'
+              ? 'Tap to interrupt'
+              : armed
+                ? 'Say “Hey Elevyn”'
+                : 'Wake word off'}
         </span>
       </motion.button>
 
