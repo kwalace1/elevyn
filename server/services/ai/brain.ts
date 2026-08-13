@@ -860,7 +860,7 @@ export class ElevynBrain {
             {
               role: 'system',
               content:
-                'You are Elevyn. Give Kevin a crisp 2-sentence spoken brief of where things stand. Use durable memory, today\'s agenda, Microsoft 365 mail/Teams when present, recent conversation, and on-screen panels. British English, no markdown, no lists. Start naturally — no filler. Do not invent mail or chats.',
+                'You are Elevyn. Give Kevin a crisp 2-sentence spoken brief of where things stand. Prefer OPEN THREADS (pending sends, unfinished plans, drafts on the board) when present, then agenda, durable memory, Microsoft 365, recent conversation, and on-screen panels. British English, no markdown, no lists. Start naturally — no filler. Do not invent mail or chats.',
             },
             { role: 'user', content: context },
           ],
@@ -1255,6 +1255,15 @@ function findSessionFact(context: string, query: string): string | null {
 
 function extractiveBrief(context: string): string {
   const bits: string[] = [];
+
+  const threads = extractSection(context, '=== OPEN THREADS ===')
+    .split('\n')
+    .map((l) => l.replace(/^-\s*(?:\[[^\]]+\]\s*)?/, '').trim())
+    .filter(Boolean);
+  if (threads[0]) {
+    bits.push(`Open thread: ${threads[0]}.`);
+  }
+
   const agenda = extractSection(context, "=== TODAY'S AGENDA ===")
     .split('\n')
     .map((l) => l.replace(/^-\s*/, '').trim())

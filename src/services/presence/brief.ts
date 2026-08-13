@@ -4,6 +4,13 @@
  */
 
 import type { SurfacePanel } from '../../types';
+import {
+  meetingSoonFromEvents,
+  speakMeetingSoon,
+  speakThreadCue,
+  type MeetingSoon,
+  type OpenThread,
+} from './threads';
 
 export interface PresenceSnapshot {
   openTasks: number;
@@ -16,12 +23,20 @@ export interface PresenceSnapshot {
   recentTurns: number;
   /** Next agenda line already formatted for speech, if any. */
   nextAgenda: string | null;
+  /** Meeting starting within ~10 minutes. */
+  meetingSoon: MeetingSoon | null;
+  /** Highest-priority open thread. */
+  openThread: OpenThread | null;
 }
 
 export function buildPresenceSnapshot(
   panels: SurfacePanel[],
   session: { facts: string[]; turns: unknown[] },
   nextAgenda: string | null = null,
+  opts?: {
+    upcoming?: { title: string; start: string }[];
+    openThread?: OpenThread | null;
+  },
 ): PresenceSnapshot {
   const tasks = panels.find((p) => p.kind === 'task');
   const openItems = (tasks?.items ?? []).filter((it) => !it.done);
@@ -35,6 +50,8 @@ export function buildPresenceSnapshot(
     );
   }
 
+  const meetingSoon = meetingSoonFromEvents(opts?.upcoming ?? [], 10);
+
   return {
     openTasks: openItems.length,
     taskPreview: openItems.slice(0, 2).map((it) => it.text),
@@ -45,6 +62,8 @@ export function buildPresenceSnapshot(
     factCount: session.facts.length,
     recentTurns: session.turns.length,
     nextAgenda,
+    meetingSoon,
+    openThread: opts?.openThread ?? null,
   };
 }
 
@@ -63,8 +82,13 @@ export function buildWakeBrief(
 ): string | null {
   const cues: string[] = [];
 
-  if (snap.nextAgenda) {
-    cues.push(`Next up: ${snap.nextAgenda}.`);
+  // Priority: imminent meeting → pending confirm → capture → timer → thread → tasks.
+  if (snap.meetingSoon) {
+    cues.push(speakMeetingSoon(snap.meetingSoon));
+  }
+
+  if (snap.openThread?.kind === 'pending_send') {
+    cues.push(speakThreadCue(snap.openThread));
   }
 
   if (snap.capturing) {
@@ -79,10 +103,22 @@ export function buildWakeBrief(
     cues.push(`Timer has ${formatMinutesLeft(snap.timerSecondsLeft)} left.`);
   }
 
-  if (snap.openTasks === 1 && snap.taskPreview[0]) {
+  if (
+    snap.openThread &&
+    snap.openThread.kind !== 'pending_send' &&
+    cues.length < 2
+  ) {
+    cues.push(speakThreadCue(snap.openThread));
+  }
+
+  if (!snap.meetingSoon && snap.nextAgenda && cues.length < 2) {
+    cues.push(`Next up: ${snap.nextAgenda}.`);
+  }
+
+  if (snap.openTasks === 1 && snap.taskPreview[0] && cues.length < 2) {
     const preview = snap.taskPreview[0].slice(0, 60);
     cues.push(`One open task: ${preview}.`);
-  } else if (snap.openTasks > 1) {
+  } else if (snap.openTasks > 1 && cues.length < 2) {
     cues.push(`${snap.openTasks} open tasks on the board.`);
   }
 
@@ -113,7 +149,17 @@ export function buildWakeBrief(
 /** Quiet status line under the brand (not spoken). */
 export function buildPresenceStatus(snap: PresenceSnapshot): string {
   const bits: string[] = [];
-  if (snap.nextAgenda) bits.push(`Next: ${snap.nextAgenda}`);
+  if (snap.meetingSoon) {
+    bits.push(
+      snap.meetingSoon.minutes <= 0
+        ? 'Meeting now'
+        : `Meeting in ${snap.meetingSoon.minutes}m`,
+    );
+  } else if (snap.nextAgenda) {
+    bits.push(`Next: ${snap.nextAgenda}`);
+  }
+  if (snap.openThread?.kind === 'pending_send') bits.push('Confirm pending');
+  else if (snap.openThread) bits.push('Open thread');
   if (snap.capturing) bits.push('Capture live');
   if (snap.timerSecondsLeft != null && snap.timerSecondsLeft > 0) {
     bits.push(`Timer ${formatMinutesLeft(snap.timerSecondsLeft)}`);

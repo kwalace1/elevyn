@@ -17,6 +17,10 @@ import {
   buildPresenceSnapshot,
   buildWakeBrief,
 } from '../services/presence/brief';
+import {
+  OpenThreads,
+  applyThreadArgs,
+} from '../services/presence/threads';
 import { formatAgendaWhen, parseSpokenAgenda } from '../utils/agendaParse';
 import {
   isEchoOfReply,
@@ -62,6 +66,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const ttsRef = useRef(new ElevynSpeech());
   const sessionRef = useRef(new SessionMemory());
   const durableRef = useRef(new DurableMemory());
+  const threadsRef = useRef(new OpenThreads());
   const processingRef = useRef(false);
   const phaseRef = useRef<ListenPhase>('wake');
   const stateRef = useRef<ElevynState>('idle');
@@ -264,6 +269,71 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     setMemoryEpoch((n) => n + 1);
   }, []);
 
+  const syncThreadsFromIntent = useCallback(
+    (intent: {
+      type: string;
+      reply?: string;
+      plan?: AgentPlan;
+      surface?: SurfaceCommand;
+      args?: Record<string, unknown>;
+    }) => {
+      applyThreadArgs(threadsRef.current, intent.args);
+
+      if (intent.type === 'agent' && intent.plan?.title) {
+        threadsRef.current.upsert({
+          kind: 'plan',
+          label: intent.plan.title,
+        });
+      }
+
+      if (intent.type === 'surface' && intent.surface?.op === 'createNote') {
+        const title = (intent.surface.title ?? '').trim();
+        if (
+          /^(prep|follow-?up|day board|thinking|note|summary|meeting)/i.test(
+            title,
+          )
+        ) {
+          threadsRef.current.upsert({
+            kind: 'draft',
+            label: title.toLowerCase().startsWith('prep')
+              ? `prep pack (${title})`
+              : title,
+          });
+        }
+      }
+      setMemoryEpoch((n) => n + 1);
+    },
+    [],
+  );
+
+  const buildInterpretContext = useCallback(() => {
+    const panelContext = getContextRef.current?.();
+    const sessionBlock = sessionRef.current.toContextBlock();
+    const durableBlock = durableRef.current.toContextBlock();
+    const threadsBlock = threadsRef.current.toContextBlock();
+    const panels = getPanelsRef.current?.() ?? [];
+    const openTaskItems = (
+      panels.find((p) => p.kind === 'task')?.items ?? []
+    ).filter((it) => !it.done);
+    const openTasksBlock =
+      openTaskItems.length > 0
+        ? `=== OPEN TASKS ===\n${openTaskItems
+            .slice(0, 8)
+            .map((it) => `- ${it.text}`)
+            .join('\n')}`
+        : undefined;
+    const contextParts = [
+      durableBlock,
+      threadsBlock,
+      sessionBlock,
+      openTasksBlock,
+      panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
+    ].filter(Boolean);
+    return contextParts.length
+      ? contextParts.join('\n\n').slice(0, 7500)
+      : undefined;
+  }, []);
+
   const runAgentPlan = useCallback(
     async (plan: AgentPlan, depth = 0): Promise<string> => {
       if (depth > 2) return 'Plan stopped — too many nested steps.';
@@ -293,6 +363,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
             if (step.surface.op === 'stopCapture') {
               captureArmedRef.current = false;
             }
+            if (step.surface.op === 'createNote') {
+              syncThreadsFromIntent({
+                type: 'surface',
+                surface: step.surface,
+              });
+            }
           }
 
           if (step.remember) {
@@ -313,34 +389,13 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           }
 
           if (step.utterance?.trim()) {
-            const panelContext = getContextRef.current?.();
-            const sessionBlock = sessionRef.current.toContextBlock();
-            const durableBlock = durableRef.current.toContextBlock();
-            const panels = getPanelsRef.current?.() ?? [];
-            const openTaskItems = (
-              panels.find((p) => p.kind === 'task')?.items ?? []
-            ).filter((it) => !it.done);
-            const openTasksBlock =
-              openTaskItems.length > 0
-                ? `=== OPEN TASKS ===\n${openTaskItems
-                    .slice(0, 8)
-                    .map((it) => `- ${it.text}`)
-                    .join('\n')}`
-                : undefined;
-            const contextParts = [
-              durableBlock,
-              sessionBlock,
-              openTasksBlock,
-              panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
-            ].filter(Boolean);
-            const context = contextParts.length
-              ? contextParts.join('\n\n').slice(0, 7500)
-              : undefined;
+            const context = buildInterpretContext();
 
             const { intent, execution } = await elevynApi.interpret(
               step.utterance.trim(),
               context,
             );
+            syncThreadsFromIntent(intent);
 
             if (intent.type === 'agent' && intent.plan) {
               await runAgentPlan(intent.plan, depth + 1);
@@ -404,12 +459,20 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       }
 
       const doneCount = steps.filter((s) => s.status === 'done').length;
+      threadsRef.current.clear('plan');
+      setMemoryEpoch((n) => n + 1);
       if (lastUseful) {
         return `Done. ${lastUseful}`;
       }
       return `Done. ${doneCount} step${doneCount === 1 ? '' : 's'} complete.`;
     },
-    [applyLearnPerson, effectHooks, publishAgentPanel],
+    [
+      applyLearnPerson,
+      buildInterpretContext,
+      effectHooks,
+      publishAgentPanel,
+      syncThreadsFromIntent,
+    ],
   );
 
   const processUtterance = useCallback(
@@ -469,32 +532,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       setError(null);
 
       try {
-        const panelContext = getContextRef.current?.();
-        const sessionBlock = sessionRef.current.toContextBlock();
-        const durableBlock = durableRef.current.toContextBlock();
-        const panels = getPanelsRef.current?.() ?? [];
-        const openTaskItems = (
-          panels.find((p) => p.kind === 'task')?.items ?? []
-        ).filter((it) => !it.done);
-        const openTasksBlock =
-          openTaskItems.length > 0
-            ? `=== OPEN TASKS ===\n${openTaskItems
-                .slice(0, 8)
-                .map((it) => `- ${it.text}`)
-                .join('\n')}`
-            : undefined;
-        const contextParts = [
-          durableBlock,
-          sessionBlock,
-          openTasksBlock,
-          panelContext ? `=== ON SCREEN ===\n${panelContext}` : undefined,
-        ].filter(Boolean);
-        const context = contextParts.length
-          ? contextParts.join('\n\n').slice(0, 7500)
-          : undefined;
+        const context = buildInterpretContext();
 
         sessionRef.current.addTurn('user', toSend);
         const { intent, execution } = await elevynApi.interpret(toSend, context);
+        syncThreadsFromIntent(intent);
 
         // Session / durable bookkeeping from brain args.
         if (intent.args?.clearSession === true) {
@@ -629,6 +671,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     },
     [
       applyLearnPerson,
+      buildInterpretContext,
       clearCommandDebounce,
       clearCommandTimeout,
       clearWakeCommit,
@@ -637,6 +680,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       runAgentPlan,
       speak,
       speakAsync,
+      syncThreadsFromIntent,
     ],
   );
 
@@ -726,7 +770,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       ttsRef.current.stop();
       speakingReplyRef.current = '';
       const panels = getPanelsRef.current?.() ?? [];
-      const next = durableRef.current.upcoming(18)[0];
+      const upcoming = durableRef.current.upcoming(18);
+      const next = upcoming[0];
       const nextAgenda = next
         ? `${next.title} at ${formatAgendaWhen(next.start)}`
         : null;
@@ -734,6 +779,10 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         panels,
         sessionRef.current.snapshot(),
         nextAgenda,
+        {
+          upcoming,
+          openThread: threadsRef.current.primary(),
+        },
       );
       const now = Date.now();
       const briefFresh = now - lastBriefAtRef.current > 80_000;
@@ -1208,5 +1257,6 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     getSessionSnapshot: () => sessionRef.current.snapshot(),
     getDurableSnapshot: () => durableRef.current.snapshot(),
     getUpcomingAgenda: () => durableRef.current.upcoming(36),
+    getPrimaryThread: () => threadsRef.current.primary(),
   };
 }

@@ -68,7 +68,10 @@ export function Shell() {
         })}`
       : null;
     return buildPresenceStatus(
-      buildPresenceSnapshot(surface.panels, session, nextAgenda),
+      buildPresenceSnapshot(surface.panels, session, nextAgenda, {
+        upcoming: elevyn.getUpcomingAgenda(),
+        openThread: elevyn.getPrimaryThread(),
+      }),
     );
     // Session/agenda snapshots are read live; panels + replies drive recompute.
     // eslint-disable-next-line react-hooks/exhaustive-deps

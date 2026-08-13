@@ -202,7 +202,11 @@ export async function tryMicrosoftWriteIntent(
     if (!pending) return null;
     try {
       const reply = await executePendingMsAction(accessToken, account);
-      return { type: 'chat', reply };
+      return {
+        type: 'chat',
+        reply,
+        args: { clearThread: 'pending_send' },
+      };
     } catch {
       return {
         type: 'chat',
@@ -216,7 +220,11 @@ export async function tryMicrosoftWriteIntent(
   ) {
     if (!getPendingMsAction(account)) return null;
     clearPendingMsAction(account);
-    return { type: 'chat', reply: 'Cancelled. Nothing sent.' };
+    return {
+      type: 'chat',
+      reply: 'Cancelled. Nothing sent.',
+      args: { clearThread: 'pending_send' },
+    };
   }
 
   // To Do — list
@@ -487,6 +495,12 @@ export async function tryMicrosoftWriteIntent(
       return {
         type: 'chat',
         reply: `I'll post in ${label}: ${message}. Say “send it” to confirm, or “cancel”.`,
+        args: {
+          openThread: {
+            kind: 'pending_send',
+            label: `post in ${label}`,
+          },
+        },
       };
     } catch {
       return {
@@ -597,7 +611,13 @@ export async function tryMicrosoftWriteIntent(
     return {
       type: 'chat',
       reply: `I'll email ${person.name}: ${body}. Say “send it” to confirm, or “cancel”.`,
-      args: learnPersonArgs(person),
+      args: {
+        ...learnPersonArgs(person),
+        openThread: {
+          kind: 'pending_send',
+          label: `email ${person.name}`,
+        },
+      },
     };
   }
 
@@ -650,7 +670,13 @@ export async function tryMicrosoftWriteIntent(
     return {
       type: 'chat',
       reply: `I'll message ${chat.title} on Teams: ${message}. Say “send it” to confirm, or “cancel”.`,
-      args: learned ? learnPersonArgs(learned) : undefined,
+      args: {
+        ...(learned ? learnPersonArgs(learned) : {}),
+        openThread: {
+          kind: 'pending_send',
+          label: `Teams message to ${chat.title}`,
+        },
+      },
     };
   }
 
