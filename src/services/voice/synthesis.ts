@@ -152,14 +152,17 @@ export class BrowserTextToSpeech implements TextToSpeechService {
       return;
     }
 
-    // Chrome sometimes stalls if cancel() races speak(); clear then speak next tick.
-    window.speechSynthesis.cancel();
-
     const speakNow = () => {
+      // iOS can leave synthesis in a paused state where speak() is a no-op.
+      try {
+        window.speechSynthesis.resume();
+      } catch {
+        // ignore
+      }
+      window.speechSynthesis.cancel();
+
       const utterance = new SpeechSynthesisUtterance(humanizeForSpeech(text));
       utterance.lang = 'en-GB';
-      // Natural cadence: close to the voice's recorded baseline. Large pitch
-      // shifts make system voices noticeably synthetic.
       utterance.rate = 0.96;
       utterance.pitch = 1;
       utterance.volume = 1;
@@ -203,16 +206,29 @@ export class BrowserTextToSpeech implements TextToSpeechService {
           finish();
         };
       }
+
+      // iOS sometimes never fires onend — watchdog so callers aren't stuck.
+      if (this.appleTouch) {
+        const ms = Math.min(20_000, 2000 + text.length * 80);
+        window.setTimeout(() => {
+          if (!finished) finish();
+        }, ms);
+      }
     };
 
-    // Allow voice list to populate on first utterance.
-    if (!this.voicesReady && window.speechSynthesis.getVoices().length === 0) {
+    // Allow voice list to populate on first utterance (desktop).
+    if (!this.appleTouch && !this.voicesReady && window.speechSynthesis.getVoices().length === 0) {
       window.setTimeout(speakNow, 120);
       return;
     }
 
-    // On Apple, speak sooner — delay can drop the gesture/unlock chain.
-    window.setTimeout(speakNow, this.appleTouch ? 0 : 20);
+    // Apple: speak synchronously — any delay drops the unlock chain for gesture calls.
+    if (this.appleTouch) {
+      speakNow();
+      return;
+    }
+
+    window.setTimeout(speakNow, 20);
   }
 
   stop(): void {

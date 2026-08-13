@@ -8,6 +8,9 @@ interface MicButtonProps {
   onToggleArmed?: () => void;
   /** iOS: unlock audio on pointerdown (before async mic/brain work). */
   onUnlockAudio?: () => void;
+  /** iOS: play last reply inside this tap gesture. */
+  onHearReply?: () => void;
+  hearAvailable?: boolean;
   disabled?: boolean;
 }
 
@@ -17,6 +20,8 @@ export function MicButton({
   onClick,
   onToggleArmed,
   onUnlockAudio,
+  onHearReply,
+  hearAvailable,
   disabled,
 }: MicButtonProps) {
   const listening = state === 'listening';
@@ -56,6 +61,17 @@ export function MicButton({
               : 'Wake word off'}
         </span>
       </motion.button>
+
+      {hearAvailable && onHearReply ? (
+        <button
+          type="button"
+          className="mic-hear"
+          onPointerDown={() => onUnlockAudio?.()}
+          onClick={onHearReply}
+        >
+          Hear reply
+        </button>
+      ) : null}
 
       {onToggleArmed ? (
         <button

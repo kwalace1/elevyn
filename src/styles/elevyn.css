@@ -522,6 +522,22 @@ button {
   padding: 4px 8px;
 }
 
+.mic-hear {
+  border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+  background: color-mix(in srgb, var(--cyan) 14%, transparent);
+  color: var(--fg-1);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: 999px;
+}
+
+.mic-hear:active {
+  transform: scale(0.97);
+}
+
 .mic-arm.is-on {
   color: var(--cyan);
 }
@@ -772,6 +788,10 @@ button {
   font-size: 1rem;
   color: var(--cyan);
   max-width: 46ch;
+}
+
+.focus__hear {
+  margin-top: 14px;
 }
 
 .focus__panels {

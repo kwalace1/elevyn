@@ -61,6 +61,8 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const [memoryEpoch, setMemoryEpoch] = useState(0);
   /** Live TTS amplitude 0–1 — drives orb presence while speaking. */
   const [voiceLevel, setVoiceLevel] = useState(0);
+  /** iPad: show Tap to hear when auto speech may be silent. */
+  const [hearAvailable, setHearAvailable] = useState(false);
 
   const recognitionRef = useRef(new BrowserSpeechRecognition());
   const ttsRef = useRef(new ElevynSpeech());
@@ -186,6 +188,10 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       stateRef.current = 'speaking';
       speakingReplyRef.current = trimmed;
       lastSpokenRef.current = trimmed;
+      // iPad: auto TTS is unreliable — keep a Tap to hear affordance ready.
+      if (ttsRef.current.isAppleTouch) {
+        setHearAvailable(true);
+      }
 
       let finished = false;
       const finish = () => {
@@ -1241,6 +1247,31 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     [resumeWakeSoon, speak],
   );
 
+  /** iPad Tap to hear — runs inside the button gesture so WebKit allows voice. */
+  const hearReply = useCallback(() => {
+    const text = (lastSpokenRef.current || response).trim();
+    if (!text) return;
+    setHearAvailable(false);
+    clearRestartTimer();
+    recognitionRef.current.abort();
+    setState('speaking');
+    stateRef.current = 'speaking';
+    speakingReplyRef.current = text;
+    ttsRef.current.speakInGesture(text, {
+      onEnd: () => {
+        echoGuardUntilRef.current = Date.now() + 600;
+        speakingReplyRef.current = '';
+        if (stateRef.current === 'speaking') {
+          setState('idle');
+          stateRef.current = 'idle';
+        }
+        if (armedRef.current && brainOnlineRef.current) {
+          resumeWakeSoon();
+        }
+      },
+    });
+  }, [clearRestartTimer, response, resumeWakeSoon]);
+
   return {
     state,
     transcript,
@@ -1251,8 +1282,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     armed,
     memoryEpoch,
     voiceLevel,
+    hearAvailable,
+    isAppleTouch: ttsRef.current.isAppleTouch,
     speechSupported: recognitionRef.current.supported,
     unlockAudio: () => ttsRef.current.unlock(),
+    hearReply,
     startListening,
     stopListening,
     toggleListening,

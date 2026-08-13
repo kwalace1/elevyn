@@ -229,13 +229,21 @@ export function Shell() {
                 onClick={elevyn.toggleListening}
                 onToggleArmed={elevyn.toggleArmed}
                 onUnlockAudio={elevyn.unlockAudio}
+                onHearReply={elevyn.hearReply}
+                hearAvailable={elevyn.hearAvailable || (elevyn.isAppleTouch && Boolean(elevyn.response))}
                 disabled={elevyn.state === 'thinking' || elevyn.state === 'speaking'}
               />
               <p className="shell__hint">
                 {elevyn.speechSupported
-                  ? elevyn.armed
-                    ? 'Say “Hey Elevyn” or just “Elevyn…”'
-                    : 'Wake word paused · click mic or press Space'
+                  ? elevyn.isAppleTouch
+                    ? elevyn.hearAvailable || elevyn.response
+                      ? 'If it’s silent, tap Hear reply — check the side mute switch too'
+                      : elevyn.armed
+                        ? 'Say “Hey Elevyn” or tap the mic'
+                        : 'Tap mic to talk · enable wake if you want hands-free'
+                    : elevyn.armed
+                      ? 'Say “Hey Elevyn” or just “Elevyn…”'
+                      : 'Wake word paused · click mic or press Space'
                   : 'Use Chrome for voice · brain still accepts text API'}
               </p>
               <div className="shell__core-telemetry" aria-hidden>
@@ -303,6 +311,10 @@ export function Shell() {
             panels={surface.panels}
             greeting={focusGreeting}
             clock={time}
+            hearAvailable={
+              elevyn.hearAvailable || (elevyn.isAppleTouch && Boolean(elevyn.response))
+            }
+            onHearReply={elevyn.hearReply}
             onExit={() => {
               surface.enterFocus();
               elevyn.stopListening();
