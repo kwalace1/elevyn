@@ -1252,6 +1252,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
     memoryEpoch,
     voiceLevel,
     speechSupported: recognitionRef.current.supported,
+    unlockAudio: () => ttsRef.current.unlock(),
     startListening,
     stopListening,
     toggleListening,

@@ -6,6 +6,8 @@ interface MicButtonProps {
   armed: boolean;
   onClick: () => void;
   onToggleArmed?: () => void;
+  /** iOS: unlock audio on pointerdown (before async mic/brain work). */
+  onUnlockAudio?: () => void;
   disabled?: boolean;
 }
 
@@ -14,6 +16,7 @@ export function MicButton({
   armed,
   onClick,
   onToggleArmed,
+  onUnlockAudio,
   disabled,
 }: MicButtonProps) {
   const listening = state === 'listening';
@@ -23,6 +26,7 @@ export function MicButton({
       <motion.button
         type="button"
         className={`mic-button ${listening ? 'is-listening' : ''} ${armed ? 'is-armed' : ''}`}
+        onPointerDown={() => onUnlockAudio?.()}
         onClick={onClick}
         disabled={disabled}
         whileTap={{ scale: 0.96 }}
@@ -57,6 +61,7 @@ export function MicButton({
         <button
           type="button"
           className={`mic-arm ${armed ? 'is-on' : ''}`}
+          onPointerDown={() => onUnlockAudio?.()}
           onClick={onToggleArmed}
           aria-pressed={armed}
         >

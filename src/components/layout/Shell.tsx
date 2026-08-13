@@ -228,6 +228,7 @@ export function Shell() {
                 armed={elevyn.armed}
                 onClick={elevyn.toggleListening}
                 onToggleArmed={elevyn.toggleArmed}
+                onUnlockAudio={elevyn.unlockAudio}
                 disabled={elevyn.state === 'thinking' || elevyn.state === 'speaking'}
               />
               <p className="shell__hint">

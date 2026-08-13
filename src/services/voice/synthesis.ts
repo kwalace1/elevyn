@@ -109,12 +109,11 @@ export class BrowserTextToSpeech implements TextToSpeechService {
   unlock(): void {
     if (!this.supported) return;
     try {
-      window.speechSynthesis.cancel();
+      // Do not cancel immediately — iOS needs a real speak() in the gesture.
       const warm = new SpeechSynthesisUtterance(' ');
       warm.volume = 0;
       warm.rate = 2;
       window.speechSynthesis.speak(warm);
-      window.speechSynthesis.cancel();
     } catch {
       // ignore
     }
