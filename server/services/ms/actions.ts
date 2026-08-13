@@ -54,10 +54,30 @@ export type PendingMsAction =
       message: string;
     };
 
+/** In-progress multi-turn compose (who → body) before confirm/send. */
+export type DraftMsAction =
+  | {
+      kind: 'teams';
+      stage: 'who' | 'body';
+      who?: string;
+      chatId?: string;
+      chatTitle?: string;
+    }
+  | {
+      kind: 'mail';
+      stage: 'who' | 'body';
+      who?: string;
+      email?: string;
+      name?: string;
+    };
+
 type PendingEntry = { action: PendingMsAction; expires: number };
+type DraftEntry = { draft: DraftMsAction; expires: number };
 
 const pendingByKey = new Map<string, PendingEntry>();
+const draftByKey = new Map<string, DraftEntry>();
 const PENDING_TTL_MS = 120_000;
+const DRAFT_TTL_MS = 180_000;
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 function pendingKey(account?: string | null): string {
@@ -122,6 +142,33 @@ export function clearPendingMsAction(account: string | null | undefined): void {
   pendingByKey.delete(pendingKey(account));
 }
 
+export function setDraftMsAction(
+  account: string | null | undefined,
+  draft: DraftMsAction,
+): void {
+  draftByKey.set(pendingKey(account), {
+    draft,
+    expires: Date.now() + DRAFT_TTL_MS,
+  });
+}
+
+export function getDraftMsAction(
+  account: string | null | undefined,
+): DraftMsAction | null {
+  const key = pendingKey(account);
+  const entry = draftByKey.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expires) {
+    draftByKey.delete(key);
+    return null;
+  }
+  return entry.draft;
+}
+
+export function clearDraftMsAction(account: string | null | undefined): void {
+  draftByKey.delete(pendingKey(account));
+}
+
 export async function executePendingMsAction(
   accessToken: string,
   account: string | null | undefined,
@@ -173,6 +220,17 @@ export function utteranceNeedsMsToken(utterance: string): boolean {
   return wantsWriteMs(utterance.toLowerCase());
 }
 
+export function awaitingNeedsMsToken(
+  awaiting: string | null | undefined,
+): boolean {
+  return (
+    awaiting === 'teamsWho' ||
+    awaiting === 'teamsBody' ||
+    awaiting === 'mailWho' ||
+    awaiting === 'mailBody'
+  );
+}
+
 /**
  * Try to handle a Microsoft write / confirm / extras utterance.
  * Returns an intent when handled, otherwise null.
@@ -187,6 +245,7 @@ export async function tryMicrosoftWriteIntent(
     endIso: string;
   } | null,
   context?: string,
+  awaiting?: string | null,
 ): Promise<InterpretedIntent | null> {
   const original = utterance.trim();
   const lower = original.toLowerCase();
@@ -201,6 +260,7 @@ export async function tryMicrosoftWriteIntent(
     const pending = getPendingMsAction(account);
     if (!pending) return null;
     try {
+      clearDraftMsAction(account);
       const reply = await executePendingMsAction(accessToken, account);
       return {
         type: 'chat',
@@ -218,13 +278,77 @@ export async function tryMicrosoftWriteIntent(
   if (
     /^(no|cancel|never ?mind|don'?t send|stop|scratch that)\.?$/i.test(lower)
   ) {
-    if (!getPendingMsAction(account)) return null;
+    const hadPending = Boolean(getPendingMsAction(account));
+    const hadDraft = Boolean(getDraftMsAction(account));
+    if (!hadPending && !hadDraft) return null;
     clearPendingMsAction(account);
+    clearDraftMsAction(account);
     return {
       type: 'chat',
       reply: 'Cancelled. Nothing sent.',
       args: { clearThread: 'pending_send' },
     };
+  }
+
+  // ── Multi-turn Teams compose (who → message → send) ──────────────
+  const teamsSlot =
+    awaiting === 'teamsWho' ||
+    awaiting === 'teamsBody' ||
+    getDraftMsAction(account)?.kind === 'teams';
+
+  if (teamsSlot) {
+    const continued = await continueTeamsDraft(
+      original,
+      accessToken,
+      account,
+      context,
+      awaiting,
+    );
+    if (continued) return continued;
+  }
+
+  // Start a Teams compose with no recipient/body yet.
+  if (
+    /^(?:please\s+)?(?:send\s+(?:a\s+)?(?:teams\s+)?message|message\s+(?:someone|somebody)?(?:\s+on\s+teams)?|send\s+(?:something|a message)\s+on\s+teams|teams\s+message|message\s+on\s+teams)\s*[.?]?$/i.test(
+      lower,
+    ) ||
+    /^(?:can you |could you )?(?:send|message|ping|text)\s+(?:on\s+)?teams\s*[.?]?$/i.test(
+      lower,
+    )
+  ) {
+    setDraftMsAction(account, { kind: 'teams', stage: 'who' });
+    return {
+      type: 'chat',
+      reply: 'Who should I message on Teams?',
+      awaiting: 'teamsWho',
+    };
+  }
+
+  // "message Nick on Teams" / "send a Teams message to Nick" (no body yet)
+  const teamsWhoOnly =
+    original.match(
+      /^(?:please\s+)?(?:(?:can you |could you )?)?(?:send\s+(?:a\s+)?(?:teams\s+)?message\s+to)\s+(.+?)\s*$/i,
+    ) ||
+    original.match(
+      /^(?:please\s+)?(?:(?:can you |could you )?)?(?:message|ping|text)\s+(.+?)\s+(?:on|via|in|over)\s+teams\s*$/i,
+    ) ||
+    original.match(
+      /^(?:please\s+)?(?:(?:can you |could you )?)?(?:teams\s+(?:message|ping|text)(?:\s+to)?)\s+(.+)\s*$/i,
+    );
+  if (teamsWhoOnly?.[1] && !/\b(?:that|saying|to say)\b/i.test(original)) {
+    const who = teamsWhoOnly[1]
+      .replace(/\b(?:an?|the)\s+/gi, '')
+      .replace(/\s+on\s+teams$/i, '')
+      .trim();
+    if (who) {
+      const prepared = await prepareTeamsRecipient(
+        accessToken,
+        account,
+        who,
+        context,
+      );
+      if (prepared) return prepared;
+    }
   }
 
   // To Do — list
@@ -633,10 +757,29 @@ export async function tryMicrosoftWriteIntent(
   if (teamsMatch) {
     const who = teamsMatch[1].replace(/\b(?:an?|the)\s+/gi, '').trim();
     const message = teamsMatch[2].replace(/[.!?]+$/, '').trim();
+    if (!who && !message) {
+      setDraftMsAction(account, { kind: 'teams', stage: 'who' });
+      return {
+        type: 'chat',
+        reply: 'Who should I message on Teams?',
+        awaiting: 'teamsWho',
+      };
+    }
+    if (who && !message) {
+      const prepared = await prepareTeamsRecipient(
+        accessToken,
+        account,
+        who,
+        context,
+      );
+      if (prepared) return prepared;
+    }
     if (!who || !message) {
+      setDraftMsAction(account, { kind: 'teams', stage: 'who' });
       return {
         type: 'chat',
         reply: 'Who on Teams, and what should I say?',
+        awaiting: 'teamsWho',
       };
     }
     const remembered = findPersonInMemory(
@@ -661,6 +804,7 @@ export async function tryMicrosoftWriteIntent(
         reply: `I could not find a Teams chat with ${who}. Open that chat once in Teams, then try again.`,
       };
     }
+    clearDraftMsAction(account);
     setPendingMsAction(account, {
       kind: 'teams',
       chatId: chat.id,
@@ -681,4 +825,135 @@ export async function tryMicrosoftWriteIntent(
   }
 
   return null;
+}
+
+async function prepareTeamsRecipient(
+  accessToken: string,
+  account: string | null | undefined,
+  who: string,
+  context?: string,
+): Promise<InterpretedIntent | null> {
+  const remembered = findPersonInMemory(parsePeopleFromContext(context), who);
+  let chat = await findTeamsChat(accessToken, remembered?.name ?? who);
+  let learned: GraphPerson | null = null;
+  if (!chat) {
+    const person = await resolvePerson(accessToken, who, context);
+    if (person) {
+      learned = person;
+      chat = await findTeamsChat(accessToken, person.name);
+    }
+  }
+  if (!chat) {
+    clearDraftMsAction(account);
+    return {
+      type: 'chat',
+      reply: `I could not find a Teams chat with ${who}. Open that chat once in Teams, then try again.`,
+    };
+  }
+  setDraftMsAction(account, {
+    kind: 'teams',
+    stage: 'body',
+    who: remembered?.name ?? who,
+    chatId: chat.id,
+    chatTitle: chat.title,
+  });
+  return {
+    type: 'chat',
+    reply: `What should I say to ${chat.title}?`,
+    awaiting: 'teamsBody',
+    args: learned ? learnPersonArgs(learned) : undefined,
+  };
+}
+
+async function continueTeamsDraft(
+  utterance: string,
+  accessToken: string,
+  account: string | null | undefined,
+  context: string | undefined,
+  awaiting?: string | null,
+): Promise<InterpretedIntent | null> {
+  const draft = getDraftMsAction(account);
+  const stage =
+    awaiting === 'teamsWho'
+      ? 'who'
+      : awaiting === 'teamsBody'
+        ? 'body'
+        : draft?.kind === 'teams'
+          ? draft.stage
+          : null;
+  if (!stage) return null;
+
+  if (stage === 'who') {
+    const who = utterance
+      .replace(/^(?:please\s+)?(?:message|send(?:\s+to)?|to)\s+/i, '')
+      .replace(/\s+on\s+teams.*$/i, '')
+      .replace(/[.!?]+$/, '')
+      .trim();
+    if (!who) {
+      setDraftMsAction(account, { kind: 'teams', stage: 'who' });
+      return {
+        type: 'chat',
+        reply: 'Who should I message on Teams?',
+        awaiting: 'teamsWho',
+      };
+    }
+    return prepareTeamsRecipient(accessToken, account, who, context);
+  }
+
+  // stage === 'body' — Kevin gave the message; send it now.
+  const message = utterance.replace(/[.!?]+$/, '').trim();
+  if (!message) {
+    const title =
+      draft?.kind === 'teams' ? draft.chatTitle ?? 'them' : 'them';
+    return {
+      type: 'chat',
+      reply: `What should I say to ${title}?`,
+      awaiting: 'teamsBody',
+    };
+  }
+
+  let chatId = draft?.kind === 'teams' ? draft.chatId : undefined;
+  let chatTitle = draft?.kind === 'teams' ? draft.chatTitle : undefined;
+  if (!chatId || !chatTitle) {
+    return {
+      type: 'chat',
+      reply: 'Who should I message on Teams?',
+      awaiting: 'teamsWho',
+    };
+  }
+
+  clearDraftMsAction(account);
+  setPendingMsAction(account, {
+    kind: 'teams',
+    chatId,
+    chatTitle,
+    message,
+  });
+
+  try {
+    const reply = await executePendingMsAction(accessToken, account);
+    return {
+      type: 'chat',
+      reply,
+      args: { clearThread: 'pending_send' },
+    };
+  } catch {
+    // Keep pending so “send it” can retry.
+    setPendingMsAction(account, {
+      kind: 'teams',
+      chatId,
+      chatTitle,
+      message,
+    });
+    return {
+      type: 'chat',
+      reply: `I drafted that to ${chatTitle}, but Teams didn't take it. Say “send it” to try again.`,
+      args: {
+        openThread: {
+          kind: 'pending_send',
+          label: `Teams message to ${chatTitle}`,
+        },
+      },
+    };
+  }
 }

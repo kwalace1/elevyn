@@ -89,7 +89,17 @@ export function useElevyn(hooks: ElevynHooks = {}) {
   const wakeCommitRef = useRef<number | null>(null);
   // When Elevyn asks a question ("what should the note say?"), it stores the
   // slot it's waiting to fill so the next utterance answers it directly.
-  const pendingAwaitRef = useRef<'note' | 'task' | 'list' | 'timer' | null>(null);
+  const pendingAwaitRef = useRef<
+    | 'note'
+    | 'task'
+    | 'list'
+    | 'timer'
+    | 'teamsWho'
+    | 'teamsBody'
+    | 'mailWho'
+    | 'mailBody'
+    | null
+  >(null);
   const resumeConversationRef = useRef<() => void>(() => {});
   // After a reply, keep command-phase listening open briefly so follow-ups
   // don't require re-saying "Elevyn" / "Eleven".
@@ -642,7 +652,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
       const cleaned = utterance.trim();
       if (!cleaned) return;
 
-      // Answering a follow-up question ("what should the note say?").
+      // Answering a follow-up question ("what should the note say?" / Teams who/body).
       let toSend = cleaned;
       const awaiting = pendingAwaitRef.current;
       pendingAwaitRef.current = null;
@@ -662,20 +672,38 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           phaseRef.current = 'wake';
           setState('idle');
           stateRef.current = 'idle';
+          // Clear server-side Teams/mail drafts too.
+          if (
+            awaiting === 'teamsWho' ||
+            awaiting === 'teamsBody' ||
+            awaiting === 'mailWho' ||
+            awaiting === 'mailBody'
+          ) {
+            void elevynApi.interpret('cancel', buildInterpretContext(), awaiting);
+          }
           speak('Of course.', resumeWakeSoon);
           return;
         }
         if (!readdressed) {
-          // Re-compose the answer into the original command for the brain.
-          const prefix =
-            awaiting === 'note'
-              ? 'make a note '
-              : awaiting === 'task'
-                ? 'add a task '
-                : awaiting === 'list'
-                  ? 'make a list '
-                  : 'set a timer for ';
-          toSend = prefix + cleaned;
+          if (
+            awaiting === 'teamsWho' ||
+            awaiting === 'teamsBody' ||
+            awaiting === 'mailWho' ||
+            awaiting === 'mailBody'
+          ) {
+            // Pass through — server continues the draft via `awaiting`.
+            toSend = cleaned;
+          } else {
+            const prefix =
+              awaiting === 'note'
+                ? 'make a note '
+                : awaiting === 'task'
+                  ? 'add a task '
+                  : awaiting === 'list'
+                    ? 'make a list '
+                    : 'set a timer for ';
+            toSend = prefix + cleaned;
+          }
         }
         // If re-addressed, fall through and treat `cleaned` as a fresh command.
       }
@@ -698,7 +726,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const context = buildInterpretContext();
 
         sessionRef.current.addTurn('user', toSend);
-        const { intent, execution } = await elevynApi.interpret(toSend, context);
+        const { intent, execution } = await elevynApi.interpret(
+          toSend,
+          context,
+          awaiting,
+        );
         syncThreadsFromIntent(intent);
 
         // Session / durable bookkeeping from brain args.

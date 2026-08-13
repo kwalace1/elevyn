@@ -21,6 +21,7 @@ import {
 import {
   tryMicrosoftWriteIntent,
   utteranceNeedsMsToken,
+  awaitingNeedsMsToken,
 } from '../services/ms/actions.js';
 import {
   buildWorkDayBrief,
@@ -97,6 +98,11 @@ export function createAiRouter(
     let context = req.body?.context
       ? String(req.body.context).slice(0, 8000)
       : undefined;
+    const awaitingRaw = req.body?.awaiting;
+    const awaiting =
+      typeof awaitingRaw === 'string' && awaitingRaw.trim()
+        ? awaitingRaw.trim()
+        : null;
 
     const lower = utterance.toLowerCase();
 
@@ -158,6 +164,7 @@ export function createAiRouter(
       /\b(check|any|read)\b.+\b(mail|email|inbox|outlook)\b/i.test(lower) ||
       /\b(teams|chat)\b/i.test(lower) ||
       utteranceNeedsMsToken(utterance) ||
+      awaitingNeedsMsToken(awaiting) ||
       Boolean(parseSpokenAgenda(utterance));
 
     const msBundle = needsMs ? await getValidAccessToken(req, res) : null;
@@ -330,6 +337,7 @@ export function createAiRouter(
               }
             : null,
           context,
+          awaiting,
         );
         if (writeIntent) {
           res.json({ intent: writeIntent, execution: null });
@@ -348,7 +356,7 @@ export function createAiRouter(
       }
     } else if (
       isMicrosoftConfigured() &&
-      utteranceNeedsMsToken(utterance) &&
+      (utteranceNeedsMsToken(utterance) || awaitingNeedsMsToken(awaiting)) &&
       !/^(yes|yeah|yep|no|cancel)/i.test(lower)
     ) {
       res.json({

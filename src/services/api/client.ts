@@ -55,13 +55,17 @@ export const elevynApi = {
 
   system: () => request<SystemSnapshot>('/api/system'),
 
-  interpret: (utterance: string, context?: string) =>
+  interpret: (
+    utterance: string,
+    context?: string,
+    awaiting?: string | null,
+  ) =>
     request<{
       intent: InterpretedIntent;
       execution: CommandExecutionResult | null;
     }>('/api/interpret', {
       method: 'POST',
-      body: JSON.stringify({ utterance, context }),
+      body: JSON.stringify({ utterance, context, awaiting }),
     }),
 
   providers: () =>
