@@ -15,6 +15,8 @@ import {
   buildPresenceStatus,
   buildTimerNudge,
 } from '../../services/presence/brief';
+import { buildTimerDoneNudge } from '../../services/presence/nudges';
+import { useProactiveNudges } from '../../hooks/useProactiveNudges';
 
 export function Shell() {
   const { time, date, greeting } = useClock();
@@ -35,6 +37,13 @@ export function Shell() {
       work: surface.view === 'work',
       capturing: surface.panels.some((p) => p.kind === 'capture' && Boolean(p.armed)),
     }),
+  });
+
+  useProactiveNudges({
+    announce: elevyn.announce,
+    getUpcomingAgenda: elevyn.getUpcomingAgenda,
+    microsoftConnected: Boolean(microsoft?.connected),
+    enabled: elevyn.armed && elevyn.brainOnline,
   });
 
   const refreshMicrosoft = useCallback(async () => {
@@ -300,7 +309,9 @@ export function Shell() {
             onDismissPanel={surface.removePanel}
             onToggleItem={surface.toggleItem}
             onTimerComplete={() => {
-              elevyn.announce('Time.');
+              elevyn.announce(buildTimerDoneNudge(
+                surface.panels.find((p) => p.kind === 'timer')?.title,
+              ));
               window.setTimeout(surface.cancelTimer, 4000);
             }}
           />

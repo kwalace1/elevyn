@@ -93,5 +93,14 @@ export const elevynApi = {
       }>('/api/msstatus'),
     logout: () =>
       request<{ ok: boolean }>('/api/mslogout', { method: 'POST' }),
+    pulse: () =>
+      request<{
+        connected: boolean;
+        configured: boolean;
+        account?: string | null;
+        unread: number;
+        nextMeeting: { title: string; start: string; end?: string | null } | null;
+        error?: string;
+      }>('/api/mspulse'),
   },
 };

@@ -85,6 +85,50 @@ function mountBrief(router: Router, path: string): void {
   });
 }
 
+function mountPulse(router: Router, path: string): void {
+  router.get(path, withMs, async (req, res) => {
+    const bundle = await getValidAccessToken(req, res);
+    if (!bundle) {
+      res.status(401).json({
+        connected: false,
+        configured: isMicrosoftConfigured(),
+        unread: 0,
+        nextMeeting: null,
+      });
+      return;
+    }
+    try {
+      const [mail, calendar] = await Promise.all([
+        fetchRecentMail(bundle.accessToken, 8).catch(() => []),
+        fetchGraphCalendar(bundle.accessToken).catch(() => []),
+      ]);
+      const unread = mail.filter((m) => m.unread).length;
+      const upcoming = calendar.filter(
+        (e) => new Date(e.end ?? e.start).getTime() >= Date.now() - 60_000,
+      );
+      const next = upcoming[0] ?? null;
+      res.json({
+        connected: true,
+        configured: true,
+        account: bundle.account ?? null,
+        unread,
+        nextMeeting: next
+          ? { title: next.title, start: next.start, end: next.end ?? null }
+          : null,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Pulse failed';
+      res.status(502).json({
+        connected: true,
+        configured: true,
+        error: message,
+        unread: 0,
+        nextMeeting: null,
+      });
+    }
+  });
+}
+
 function mountMail(router: Router, path: string): void {
   router.get(path, withMs, async (req, res) => {
     const bundle = await getValidAccessToken(req, res);
@@ -129,6 +173,7 @@ export function createMsRouter(): Router {
   mountStatus(router, '/msstatus');
   mountLogout(router, '/mslogout');
   mountBrief(router, '/msbrief');
+  mountPulse(router, '/mspulse');
   mountMail(router, '/msmail');
   mountTeams(router, '/msteams');
 
@@ -137,6 +182,7 @@ export function createMsRouter(): Router {
   mountStatus(router, '/ms/status');
   mountLogout(router, '/ms/logout');
   mountBrief(router, '/ms/brief');
+  mountPulse(router, '/ms/pulse');
   mountMail(router, '/ms/mail');
   mountTeams(router, '/ms/teams');
 
