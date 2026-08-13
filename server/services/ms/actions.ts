@@ -165,11 +165,10 @@ export async function tryMicrosoftWriteIntent(
     try {
       const reply = await executePendingMsAction(accessToken, account);
       return { type: 'chat', reply };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Send failed';
+    } catch {
       return {
         type: 'chat',
-        reply: `I could not send that. ${message}`,
+        reply: "I couldn't send that just now. Want to try again?",
       };
     }
   }
@@ -191,9 +190,11 @@ export async function tryMicrosoftWriteIntent(
     try {
       const tasks = await listTodoTasks(accessToken);
       return { type: 'chat', reply: speakTodoBrief(tasks) };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'To Do unavailable';
-      return { type: 'chat', reply: `I could not reach To Do. ${message}` };
+    } catch {
+      return {
+        type: 'chat',
+        reply: "I couldn't reach To Do just now. Want to try again?",
+      };
     }
   }
 
@@ -215,9 +216,11 @@ export async function tryMicrosoftWriteIntent(
     try {
       const task = await createTodoTask(accessToken, title);
       return { type: 'chat', reply: `Added to To Do: ${task.title}.` };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'To Do write failed';
-      return { type: 'chat', reply: `I could not add that task. ${message}` };
+    } catch {
+      return {
+        type: 'chat',
+        reply: "I couldn't add that task just now. Want to try again?",
+      };
     }
   }
 
@@ -236,11 +239,10 @@ export async function tryMicrosoftWriteIntent(
       try {
         const hits = await searchFiles(accessToken, query);
         return { type: 'chat', reply: speakFileHits(hits, query) };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'OneDrive failed';
+      } catch {
         return {
           type: 'chat',
-          reply: `I could not search OneDrive. ${message}`,
+          reply: "I couldn't search OneDrive just now. Want to try again?",
         };
       }
     }
@@ -264,11 +266,10 @@ export async function tryMicrosoftWriteIntent(
           };
         }
         return { type: 'chat', reply: speakContact(hits[0]) };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Contacts failed';
+      } catch {
         return {
           type: 'chat',
-          reply: `I could not read contacts. ${message}`,
+          reply: "I couldn't read contacts just now. Want to try again?",
         };
       }
     }
@@ -294,11 +295,10 @@ export async function tryMicrosoftWriteIntent(
       }
       const status = await getPresenceForUser(accessToken, person.email);
       return { type: 'chat', reply: `${person.name} looks ${status}.` };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Presence failed';
+    } catch {
       return {
         type: 'chat',
-        reply: `I could not check presence. ${message}`,
+        reply: "I couldn't check presence just now. Want to try again?",
       };
     }
   }
@@ -315,9 +315,11 @@ export async function tryMicrosoftWriteIntent(
     try {
       const rooms = await findRooms(accessToken, hintMatch?.[1]);
       return { type: 'chat', reply: speakRooms(rooms) };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Rooms unavailable';
-      return { type: 'chat', reply: `I could not list rooms. ${message}` };
+    } catch {
+      return {
+        type: 'chat',
+        reply: "I couldn't list rooms just now. Want to try again?",
+      };
     }
   }
 
@@ -351,11 +353,10 @@ export async function tryMicrosoftWriteIntent(
         type: 'chat',
         reply: `${ch.teamName} · ${ch.channelName}. ${lines.slice(0, 3).join(' ')}`,
       };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Channel read failed';
+    } catch {
       return {
         type: 'chat',
-        reply: `I could not read that channel. ${message}`,
+        reply: "I couldn't read that channel just now. Want to try again?",
       };
     }
   }
@@ -407,12 +408,10 @@ export async function tryMicrosoftWriteIntent(
         type: 'chat',
         reply: `I'll post in ${label}: ${message}. Say “send it” to confirm, or “cancel”.`,
       };
-    } catch (err) {
-      const messageErr =
-        err instanceof Error ? err.message : 'Channel post failed';
+    } catch {
       return {
         type: 'chat',
-        reply: `I could not prepare that post. ${messageErr}`,
+        reply: "I couldn't prepare that post just now. Want to try again?",
       };
     }
   }
@@ -461,12 +460,10 @@ export async function tryMicrosoftWriteIntent(
         reply: `On your Outlook calendar: ${schedule.title} at ${when}.${invite}${teams}`,
         args: { scheduleUtterance: original },
       };
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Calendar write failed';
+    } catch {
       return {
         type: 'chat',
-        reply: `I could not create that Outlook event. ${message}`,
+        reply: "I couldn't create that Outlook event just now. Want to try again?",
         args: { scheduleUtterance: original },
       };
     }

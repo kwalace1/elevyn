@@ -153,13 +153,12 @@ export function createAiRouter(
           execution: null,
         });
         return;
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Calendar unavailable';
+      } catch {
         res.json({
           intent: {
             type: 'chat',
-            reply: `I could not reach your Outlook calendar just now. ${message}`,
+            reply:
+              "I couldn't reach your calendar just now. Want to try again in a moment?",
           },
           execution: null,
         });
@@ -187,12 +186,12 @@ export function createAiRouter(
           res.json({ intent: writeIntent, execution: null });
           return;
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Microsoft action failed';
+      } catch {
         res.json({
           intent: {
             type: 'chat',
-            reply: `Microsoft action failed. ${message}`,
+            reply:
+              "I couldn't finish that Microsoft action just now. Want to try again?",
           },
           execution: null,
         });
@@ -235,12 +234,12 @@ export function createAiRouter(
           execution: null,
         });
         return;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Mail unavailable';
+      } catch {
         res.json({
           intent: {
             type: 'chat',
-            reply: `I could not reach Outlook just now. ${message}`,
+            reply:
+              "I couldn't reach Outlook just now. Want to try again in a moment?",
           },
           execution: null,
         });
@@ -263,12 +262,12 @@ export function createAiRouter(
           execution: null,
         });
         return;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Teams unavailable';
+      } catch {
         res.json({
           intent: {
             type: 'chat',
-            reply: `I could not reach Teams just now. ${message}`,
+            reply:
+              "I couldn't reach Teams just now. Want to try again in a moment?",
           },
           execution: null,
         });

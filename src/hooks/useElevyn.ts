@@ -23,6 +23,7 @@ import {
   matchAddress,
   matchCaptureShortcut,
 } from '../utils/wakeWord';
+import { safeSpeakReply } from '../utils/spokenReply';
 
 type ListenPhase = 'wake' | 'command';
 
@@ -159,13 +160,15 @@ export function useElevyn(hooks: ElevynHooks = {}) {
 
   const speak = useCallback(
     (text: string, onDone?: () => void) => {
-      const trimmed = text.trim();
-      if (!trimmed) {
+      const raw = text.trim();
+      if (!raw) {
         setState('idle');
         stateRef.current = 'idle';
         onDone?.();
         return;
       }
+      // Final choke point — never let tool/XML/JSON leakage hit the speakers.
+      const trimmed = safeSpeakReply(raw);
 
       // Mute the mic while Elevyn talks — open mics during TTS hear Sonia
       // and treat the reply as a user utterance.
@@ -344,11 +347,14 @@ export function useElevyn(hooks: ElevynHooks = {}) {
                   // ignore
                 }
               }
-              const stepReply =
+              const rawStep =
                 execution && !execution.success
                   ? execution.message
                   : intent.reply;
-              if (stepReply?.trim()) lastUseful = stepReply.trim();
+              const stepReply = rawStep?.trim()
+                ? safeSpeakReply(rawStep)
+                : '';
+              if (stepReply.trim()) lastUseful = stepReply.trim();
             }
           }
 
@@ -484,10 +490,12 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         // Multi-step agency: ack → run plan on glass → final summary.
         if (intent.type === 'agent' && intent.plan?.steps?.length) {
           setTranscript('');
-          const opening = intent.reply.trim() || 'On it.';
+          const opening = safeSpeakReply(intent.reply.trim() || 'On it.');
           sessionRef.current.addTurn('assistant', opening);
           await speakAsync(opening);
-          const summary = await runAgentPlan(intent.plan);
+          const summary = safeSpeakReply(
+            (await runAgentPlan(intent.plan)) || 'Done.',
+          );
           sessionRef.current.addTurn('assistant', summary);
           await speakAsync(summary);
           resumeWakeSoon();
@@ -509,10 +517,11 @@ export function useElevyn(hooks: ElevynHooks = {}) {
           }, 600);
         }
 
-        const reply =
+        const rawReply =
           execution && !execution.success
             ? execution.message
             : intent.reply;
+        const reply = rawReply?.trim() ? safeSpeakReply(rawReply) : '';
 
         // Capture lines stay on the panel — don't flood session chat history.
         const silent =
@@ -570,7 +579,7 @@ export function useElevyn(hooks: ElevynHooks = {}) {
         const message =
           err instanceof Error ? err.message : 'Something went wrong.';
         setError(message);
-        speak('Pardon me — I could not reach the Elevyn brain.', resumeWakeSoon);
+        speak('Pardon me — I lost that for a moment. Could you try again?', resumeWakeSoon);
       } finally {
         processingRef.current = false;
       }

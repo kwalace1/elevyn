@@ -16,6 +16,11 @@ import type { AIProviderRegistry } from './registry.js';
 import type { CommandRegistry } from '../commands/registry.js';
 import type { MemoryService } from '../memory/store.js';
 import { matchAgentPlan } from '../../../src/services/agent/plans.js';
+import {
+  looksTechnical,
+  sanitizeSpokenReply,
+  UNSURE_REPLY,
+} from '../../../src/utils/spokenReply.js';
 
 /** Kevin's timezone — Vercel functions run in UTC, so never trust server local time. */
 const TIME_ZONE = process.env.ELEVYN_TZ ?? 'America/New_York';
@@ -40,11 +45,16 @@ Use SESSION FACTS, DURABLE MEMORY, TODAY'S AGENDA, and MICROSOFT 365 blocks when
 Answer "what's next" / "am I free" / calendar questions from the agenda or Microsoft calendar context. Treat durable memory as long-term knowledge about Kevin's work and people.
 When MICROSOFT 365 context is present, weave unread mail and Teams into catch-me-up briefly — do not invent messages.
 Kevin may ask you to email, Teams-message, or schedule on Outlook — the server handles those write actions; prefer confirming facts you know.
-Never invent tool calls, function calls, or commandIds that are not in the command list below. If you are unsure, answer as chat.
+
+CRITICAL — spoken replies must stay human:
+- Never invent tool calls, function calls, XML, APIs, command names, permission names, or endpoint paths.
+- Never mention commandId, Graph, OAuth, JSON, schemas, or internal systems.
+- Only use a commandId from the Commands list below. If none fit, answer as chat.
+- If you are unsure what Kevin wants, reply as chat asking a short clarifying question — conversational, not technical.
 
 Respond with ONLY one JSON object on a single line, matching one of these shapes:
 
-Control the computer:
+Control the computer (commandId MUST be from the Commands list):
 {"type":"command","commandId":"<id>","args":{...},"reply":"<spoken confirmation>"}
 
 Change the on-screen surface or create content on screen:
@@ -110,7 +120,7 @@ export class ElevynBrain {
       return {
         type: 'chat',
         reply:
-          'I am online, but no AI provider is available yet. Add an OpenRouter key or start Ollama, and I will be fully at your service.',
+          "I'm with you, but I can't think clearly just yet. Give me a moment and try again.",
       };
     }
 
@@ -143,7 +153,7 @@ export class ElevynBrain {
     } catch {
       return {
         type: 'chat',
-        reply: 'Something went wrong reaching the model. I am still here for notes and commands.',
+        reply: 'Pardon me — I had trouble with that. Could you try again?',
       };
     }
   }
@@ -854,23 +864,60 @@ export class ElevynBrain {
   }
 
   private parseModelIntent(raw: string, fallbackUtterance: string): InterpretedIntent {
+    // Hard reject tool/XML leakage before any JSON salvage.
+    if (looksTechnical(raw) && !/^\s*\{/.test(raw.trim())) {
+      const localEarly = this.matchLocalIntent(fallbackUtterance);
+      if (localEarly) return localEarly;
+      return { type: 'chat', reply: UNSURE_REPLY };
+    }
+
+    const knownCommands = new Set(this.commands.list().map((c) => c.id));
+    const validSurfaceOps = new Set([
+      'focus',
+      'work',
+      'dashboard',
+      'clear',
+      'createNote',
+      'createTask',
+      'createList',
+      'addItem',
+      'removeLast',
+      'startCapture',
+      'stopCapture',
+      'appendCapture',
+      'timer',
+      'cancelTimer',
+      'upsertAgent',
+      'clearAgent',
+    ]);
+
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[0]) as InterpretedIntent;
-        if (parsed.type === 'command' && parsed.commandId && parsed.reply) {
+        const safeReply =
+          sanitizeSpokenReply(parsed.reply) ?? UNSURE_REPLY;
+
+        if (parsed.type === 'command' && parsed.commandId) {
+          if (!knownCommands.has(parsed.commandId)) {
+            return { type: 'chat', reply: UNSURE_REPLY };
+          }
           return {
             type: 'command',
             commandId: parsed.commandId,
             args: parsed.args ?? {},
-            reply: parsed.reply,
+            reply: safeReply,
           };
         }
-        if (parsed.type === 'surface' && parsed.surface?.op) {
+        if (
+          parsed.type === 'surface' &&
+          parsed.surface?.op &&
+          validSurfaceOps.has(parsed.surface.op)
+        ) {
           return {
             type: 'surface',
             surface: parsed.surface,
-            reply: parsed.reply || 'Certainly.',
+            reply: safeReply === UNSURE_REPLY ? 'Certainly.' : safeReply,
           };
         }
         if (parsed.type === 'agent' && parsed.plan?.steps?.length) {
@@ -879,12 +926,15 @@ export class ElevynBrain {
             return {
               type: 'agent',
               plan,
-              reply: parsed.reply || 'On it.',
+              reply: safeReply === UNSURE_REPLY ? 'On it.' : safeReply,
             };
           }
         }
-        if (parsed.type === 'chat' && parsed.reply) {
-          return { type: 'chat', reply: parsed.reply };
+        if (parsed.type === 'chat') {
+          return {
+            type: 'chat',
+            reply: sanitizeSpokenReply(parsed.reply) ?? UNSURE_REPLY,
+          };
         }
       } catch {
         // fall through
@@ -904,21 +954,24 @@ export class ElevynBrain {
         reply = reply.replace(/\s+\S*$/, '').trim();
         if (reply) reply += '.';
       }
-      if (reply) return { type: 'chat', reply };
+      const safe = sanitizeSpokenReply(reply);
+      if (safe) return { type: 'chat', reply: safe };
     }
 
     // Retry local match if the model returned prose.
     const local = this.matchLocalIntent(fallbackUtterance);
     if (local) return local;
 
-    // Never surface raw JSON scaffolding to the user.
-    const cleaned = raw
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/\{[\s\S]*\}?/g, '')
-      .trim();
+    // Never surface raw JSON scaffolding or tool markup to the user.
+    const cleaned = sanitizeSpokenReply(
+      raw
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/\{[\s\S]*\}?/g, '')
+        .trim(),
+    );
     return {
       type: 'chat',
-      reply: cleaned.slice(0, 280) || 'Understood.',
+      reply: cleaned || UNSURE_REPLY,
     };
   }
 }
